@@ -1,0 +1,42 @@
+services:
+  voice-service:
+    image: tsbot-portable-voice-service:20260413-amd64
+    pull_policy: never
+    env_file:
+      - tsbot.env
+    ports:
+      - "127.0.0.1:50051:50051"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - voicetmp:/app/tmp
+
+  backend:
+    image: tsbot-portable-backend:20260413-amd64
+    pull_policy: never
+    env_file:
+      - tsbot.env
+    environment:
+      TSBOT_HOST: 0.0.0.0
+      TSBOT_PORT: 8009
+      TSBOT_VOICE_GRPC_ADDR: voice-service:50051
+      DATABASE_URL: sqlite:///./data/tsbot.db
+    depends_on:
+      - voice-service
+    ports:
+      - "127.0.0.1:8009:8009"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - voicetmp:/app/tmp
+
+  web:
+    image: tsbot-portable-web:20260413-amd64
+    pull_policy: never
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"
+
+volumes:
+  voicetmp:
