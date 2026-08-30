@@ -1,0 +1,11 @@
+GSAP 3.15.0
+
+Copyright 2026 GreenSock / Webflow. All rights reserved.
+
+The bundled GSAP distribution identifies its license as the Standard
+"No Charge" GSAP License. The current terms are published at:
+
+https://gsap.com/community/standard-license/
+
+GSAP is third-party software and is not relicensed under this repository's
+GPL-3.0 license. Its proprietary notices must remain intact.

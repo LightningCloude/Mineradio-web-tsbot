@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
+    && python -m playwright install --with-deps chromium \
+    && python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True, args=['--disable-dev-shm-usage', '--no-sandbox']); b.close(); p.stop()" \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend /app/backend
+COPY proto /app/proto
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/tsbot/
+COPY LICENSES /usr/share/licenses/tsbot/LICENSES
+
+
+EXPOSE 8009
+
+CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8009"]

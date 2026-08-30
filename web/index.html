@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MineraTS</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <video id="bg-video" muted loop playsinline></video>
+    <div id="visual-stage">
+      <canvas id="particle-canvas"></canvas>
+      <div id="lyric-stage"></div>
+    </div>
+    <div id="player-bar"></div>
+    <div id="search-overlay"></div>
+    <div id="queue-panel"></div>
+    <div id="shelf-3d"></div>
+    <div id="toast-container"></div>
+    <div id="connection-bar"></div>
+    <div id="visual-settings-panel"></div>
+  </div>
+
+  <!-- SVG glass filters: RGB chromatic displacement + screen blend -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;pointer-events:none" aria-hidden="true">
+    <defs>
+      <filter id="minerats-player-glass" color-interpolation-filters="sRGB" x="-12%" y="-28%" width="124%" height="156%">
+        <feImage id="player-glass-map" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="map"></feImage>
+        <!-- Red channel: R displace + X offset -->
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="180" xChannelSelector="R" yChannelSelector="B" result="dispRed"></feDisplacementMap>
+        <feOffset in="dispRed" dx="-90" dy="0" result="dispRedShifted"></feOffset>
+        <feMerge result="dispRedAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispRedShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispRedAligned" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red"></feColorMatrix>
+        <!-- Green channel -->
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="170" xChannelSelector="R" yChannelSelector="B" result="dispGreen"></feDisplacementMap>
+        <feOffset in="dispGreen" dx="-90" dy="0" result="dispGreenShifted"></feOffset>
+        <feMerge result="dispGreenAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispGreenShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispGreenAligned" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green"></feColorMatrix>
+        <!-- Blue channel -->
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="160" xChannelSelector="R" yChannelSelector="B" result="dispBlue"></feDisplacementMap>
+        <feOffset in="dispBlue" dx="-90" dy="0" result="dispBlueShifted"></feOffset>
+        <feMerge result="dispBlueAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispBlueShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispBlueAligned" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue"></feColorMatrix>
+        <!-- Screen blend RGB + final blur -->
+        <feBlend in="red" in2="green" mode="screen" result="rg"></feBlend>
+        <feBlend in="rg" in2="blue" mode="screen" result="output"></feBlend>
+        <feGaussianBlur in="output" stdDeviation="0.5"></feGaussianBlur>
+      </filter>
+
+      <filter id="minerats-search-glass" color-interpolation-filters="sRGB" x="-24%" y="-34%" width="158%" height="168%">
+        <feImage id="search-glass-map" x="-10%" y="-4%" width="120%" height="108%" preserveAspectRatio="none" result="map"></feImage>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="180" xChannelSelector="R" yChannelSelector="B" result="dispRed"></feDisplacementMap>
+        <feOffset in="dispRed" dx="-90" dy="0" result="dispRedShifted"></feOffset>
+        <feMerge result="dispRedAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispRedShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispRedAligned" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="170" xChannelSelector="R" yChannelSelector="B" result="dispGreen"></feDisplacementMap>
+        <feOffset in="dispGreen" dx="-90" dy="0" result="dispGreenShifted"></feOffset>
+        <feMerge result="dispGreenAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispGreenShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispGreenAligned" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="160" xChannelSelector="R" yChannelSelector="B" result="dispBlue"></feDisplacementMap>
+        <feOffset in="dispBlue" dx="-90" dy="0" result="dispBlueShifted"></feOffset>
+        <feMerge result="dispBlueAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispBlueShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispBlueAligned" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue"></feColorMatrix>
+        <feBlend in="red" in2="green" mode="screen" result="rg"></feBlend>
+        <feBlend in="rg" in2="blue" mode="screen" result="output"></feBlend>
+        <feGaussianBlur in="output" stdDeviation="0.5"></feGaussianBlur>
+      </filter>
+
+      <filter id="minerats-queue-glass" color-interpolation-filters="sRGB" x="-24%" y="-34%" width="158%" height="168%">
+        <feImage id="queue-glass-map" x="-10%" y="-4%" width="120%" height="108%" preserveAspectRatio="none" result="map"></feImage>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="180" xChannelSelector="R" yChannelSelector="B" result="dispRed"></feDisplacementMap>
+        <feOffset in="dispRed" dx="-90" dy="0" result="dispRedShifted"></feOffset>
+        <feMerge result="dispRedAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispRedShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispRedAligned" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="170" xChannelSelector="R" yChannelSelector="B" result="dispGreen"></feDisplacementMap>
+        <feOffset in="dispGreen" dx="-90" dy="0" result="dispGreenShifted"></feOffset>
+        <feMerge result="dispGreenAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispGreenShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispGreenAligned" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="160" xChannelSelector="R" yChannelSelector="B" result="dispBlue"></feDisplacementMap>
+        <feOffset in="dispBlue" dx="-90" dy="0" result="dispBlueShifted"></feOffset>
+        <feMerge result="dispBlueAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispBlueShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispBlueAligned" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue"></feColorMatrix>
+        <feBlend in="red" in2="green" mode="screen" result="rg"></feBlend>
+        <feBlend in="rg" in2="blue" mode="screen" result="output"></feBlend>
+        <feGaussianBlur in="output" stdDeviation="0.5"></feGaussianBlur>
+      </filter>
+
+      <filter id="minerats-cookie-glass" color-interpolation-filters="sRGB" x="-24%" y="-34%" width="158%" height="168%">
+        <feImage id="cookie-glass-map" x="-10%" y="-4%" width="120%" height="108%" preserveAspectRatio="none" result="map"></feImage>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="180" xChannelSelector="R" yChannelSelector="B" result="dispRed"></feDisplacementMap>
+        <feOffset in="dispRed" dx="-90" dy="0" result="dispRedShifted"></feOffset>
+        <feMerge result="dispRedAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispRedShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispRedAligned" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="170" xChannelSelector="R" yChannelSelector="B" result="dispGreen"></feDisplacementMap>
+        <feOffset in="dispGreen" dx="-90" dy="0" result="dispGreenShifted"></feOffset>
+        <feMerge result="dispGreenAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispGreenShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispGreenAligned" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="160" xChannelSelector="R" yChannelSelector="B" result="dispBlue"></feDisplacementMap>
+        <feOffset in="dispBlue" dx="-90" dy="0" result="dispBlueShifted"></feOffset>
+        <feMerge result="dispBlueAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispBlueShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispBlueAligned" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue"></feColorMatrix>
+        <feBlend in="red" in2="green" mode="screen" result="rg"></feBlend>
+        <feBlend in="rg" in2="blue" mode="screen" result="output"></feBlend>
+        <feGaussianBlur in="output" stdDeviation="0.5"></feGaussianBlur>
+      </filter>
+
+      <filter id="minerats-visual-glass" color-interpolation-filters="sRGB" x="-24%" y="-34%" width="158%" height="168%">
+        <feImage id="visual-glass-map" x="-10%" y="-4%" width="120%" height="108%" preserveAspectRatio="none" result="map"></feImage>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="180" xChannelSelector="R" yChannelSelector="B" result="dispRed"></feDisplacementMap>
+        <feOffset in="dispRed" dx="-90" dy="0" result="dispRedShifted"></feOffset>
+        <feMerge result="dispRedAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispRedShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispRedAligned" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="170" xChannelSelector="R" yChannelSelector="B" result="dispGreen"></feDisplacementMap>
+        <feOffset in="dispGreen" dx="-90" dy="0" result="dispGreenShifted"></feOffset>
+        <feMerge result="dispGreenAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispGreenShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispGreenAligned" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green"></feColorMatrix>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="160" xChannelSelector="R" yChannelSelector="B" result="dispBlue"></feDisplacementMap>
+        <feOffset in="dispBlue" dx="-90" dy="0" result="dispBlueShifted"></feOffset>
+        <feMerge result="dispBlueAligned"><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="dispBlueShifted"></feMergeNode></feMerge>
+        <feColorMatrix in="dispBlueAligned" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue"></feColorMatrix>
+        <feBlend in="red" in2="green" mode="screen" result="rg"></feBlend>
+        <feBlend in="rg" in2="blue" mode="screen" result="output"></feBlend>
+        <feGaussianBlur in="output" stdDeviation="0.5"></feGaussianBlur>
+      </filter>
+    </defs>
+  </svg>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

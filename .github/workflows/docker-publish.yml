@@ -1,0 +1,316 @@
+name: Docker Publish
+
+'on':
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+    paths:
+      - '.github/workflows/docker-publish.yml'
+      - '.dockerignore'
+      - 'Dockerfile.backend'
+      - 'Dockerfile.voice-service'
+      - 'Dockerfile.web'
+      - 'docker-compose.yml'
+      - 'docker-compose.prebuilt.yml'
+      - 'docker/**'
+      - 'README.md'
+      - 'README.en.md'
+      - 'HOWTOSTART.md'
+      - 'LICENSE'
+      - 'LICENSES/**'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'Makefile'
+      - 'tsbot.env.example'
+      - 'run-backend.sh'
+      - 'run-web.sh'
+      - 'run-web.ps1'
+      - 'run-voicemake.sh'
+      - 'nohup-start.sh'
+      - 'nohup-stop.sh'
+      - 'nohup-status.sh'
+      - 'backend/**'
+      - 'web/**'
+      - 'voice-service/**'
+      - 'proto/**'
+      - 'vendor/**'
+  pull_request:
+    paths:
+      - '.github/workflows/docker-publish.yml'
+      - '.dockerignore'
+      - 'Dockerfile.backend'
+      - 'Dockerfile.voice-service'
+      - 'Dockerfile.web'
+      - 'docker-compose.yml'
+      - 'docker-compose.prebuilt.yml'
+      - 'docker/**'
+      - 'README.md'
+      - 'README.en.md'
+      - 'HOWTOSTART.md'
+      - 'LICENSE'
+      - 'LICENSES/**'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'Makefile'
+      - 'tsbot.env.example'
+      - 'run-backend.sh'
+      - 'run-web.sh'
+      - 'run-web.ps1'
+      - 'run-voicemake.sh'
+      - 'nohup-start.sh'
+      - 'nohup-stop.sh'
+      - 'nohup-status.sh'
+      - 'backend/**'
+      - 'web/**'
+      - 'voice-service/**'
+      - 'proto/**'
+      - 'vendor/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Test backend
+        run: |
+          python -m compileall -q backend scripts tests
+          python -m unittest discover -s backend/tests -v
+          python -m unittest discover -s tests -v
+        env:
+          TSBOT_COOKIE_KEY: ci-cookie-key-must-be-at-least-32-characters
+          TSBOT_API_TOKEN: ci-api-token
+          TSBOT_ADMIN_TOKEN: ci-admin-token
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Test and build web
+        run: |
+          npm ci --prefix web
+          npm --prefix web test
+          npm --prefix web run build
+          npm --prefix web audit
+
+      - name: Install voice-service build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake
+
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Test voice-service with locked dependencies
+        run: cargo test --manifest-path voice-service/Cargo.toml --locked
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            dockerfile: Dockerfile.backend
+            image_suffix: backend
+          - service: web
+            dockerfile: Dockerfile.web
+            image_suffix: web
+          - service: voice-service
+            dockerfile: Dockerfile.voice-service
+            image_suffix: voice-service
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Normalize image names
+        id: prep
+        env:
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || github.repository_owner }}
+        run: |
+          ghcr_owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repo="$(echo "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')"
+          dockerhub_namespace="${DOCKERHUB_NAMESPACE:-${DOCKERHUB_USERNAME:-local}}"
+          dockerhub_namespace="$(echo "$dockerhub_namespace" | tr '[:upper:]' '[:lower:]')"
+          echo "ghcr_owner=${ghcr_owner}" >> "$GITHUB_OUTPUT"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_namespace=${dockerhub_namespace}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Docker Hub credentials
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || github.repository_owner }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.LIGHTNINGCLOUDE }}
+        run: |
+          test -n "$DOCKERHUB_USERNAME" || { echo 'Missing secret: DOCKERHUB_USERNAME'; exit 1; }
+          test -n "$DOCKERHUB_TOKEN" || { echo 'Missing secret: DOCKERHUB_TOKEN'; exit 1; }
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME || github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.LIGHTNINGCLOUDE }}
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            docker.io/${{ steps.prep.outputs.dockerhub_namespace }}/${{ steps.prep.outputs.repo }}-${{ matrix.image_suffix }}
+            ghcr.io/${{ steps.prep.outputs.ghcr_owner }}/${{ steps.prep.outputs.repo }}-${{ matrix.image_suffix }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=${{ matrix.service }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  package:
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Compute package metadata
+        id: pkg
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = 'tag' ]; then
+            raw_version="$REF_NAME"
+          elif [ "$REF_TYPE" = 'branch' ]; then
+            raw_version="$REF_NAME-${GITHUB_SHA::7}"
+          else
+            raw_version="manual-${GITHUB_SHA::7}"
+          fi
+          version="$(echo "$raw_version" | sed 's#[^A-Za-z0-9._-]#-#g')"
+          bundle="tsbot-${version}-linux-amd64"
+          archive="${bundle}.tar.gz"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "bundle=${bundle}" >> "$GITHUB_OUTPUT"
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web assets
+        run: |
+          npm ci --prefix web
+          npm --prefix web run build
+
+      - name: Install voice-service build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake
+
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Build voice-service
+        run: cargo build --manifest-path voice-service/Cargo.toml --release --locked
+
+      - name: Create release bundle
+        run: |
+          bundle_dir="$RUNNER_TEMP/${{ steps.pkg.outputs.bundle }}"
+          mkdir -p "$bundle_dir/bin" "$bundle_dir/web"
+          rsync -a \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            backend/ "$bundle_dir/backend/"
+          rsync -a proto/ "$bundle_dir/proto/"
+          rsync -a web/dist/ "$bundle_dir/web/dist/"
+          install -m 755 voice-service/target/release/voice-service "$bundle_dir/bin/voice-service"
+          cp tsbot.env.example README.md README.en.md HOWTOSTART.md LICENSE THIRD_PARTY_NOTICES.md docker-compose.yml docker-compose.prebuilt.yml "$bundle_dir/"
+          cp -R LICENSES "$bundle_dir/LICENSES"
+          cp run-backend.sh run-web.sh run-voicemake.sh nohup-start.sh nohup-stop.sh nohup-status.sh "$bundle_dir/"
+          mkdir -p dist
+          tar -C "$RUNNER_TEMP" -czf "dist/${{ steps.pkg.outputs.archive }}" "${{ steps.pkg.outputs.bundle }}"
+          (cd dist && sha256sum "${{ steps.pkg.outputs.archive }}" > SHA256SUMS.txt)
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.bundle }}
+          path: |
+            dist/${{ steps.pkg.outputs.archive }}
+            dist/SHA256SUMS.txt
+          retention-days: 14
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ steps.pkg.outputs.archive }}
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
