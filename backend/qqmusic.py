@@ -6,6 +6,7 @@ from html import unescape
 from http.cookies import SimpleCookie
 import json
 import logging
+import secrets
 import time
 from urllib.parse import quote
 import httpx
@@ -46,6 +47,7 @@ class QQMusicClient:
         }
         self._cookie = ""
         self._uin = ""
+        self._cookie_values: dict[str, str] = {}
 
     def set_cookie(self, cookie: str | dict[str, str]) -> None:
         """设置 QQ 音乐 Cookie"""
@@ -61,6 +63,12 @@ class QQMusicClient:
             jar.load(cookie_str)
         except Exception:
             jar = SimpleCookie()
+
+        self._cookie_values = {
+            name.lower(): morsel.value.strip()
+            for name, morsel in jar.items()
+            if morsel.value and morsel.value.strip()
+        }
 
         self._uin = ""
         uin_val = ""
@@ -96,6 +104,28 @@ class QQMusicClient:
     def get_uin(self) -> str:
         """获取当前用户 UIN"""
         return self._uin
+
+    def _get_music_auth_key(self) -> str:
+        """Return the QQ Music session key accepted by the vkey endpoint.
+
+        QQ Music uses several cookie names across web, desktop and WeChat login
+        flows.  The key is sent only to QQ's vkey endpoint and is never logged.
+        """
+        for name in (
+            "qm_keyst",
+            "qqmusic_key",
+            "music_key",
+            "p_skey",
+            "skey",
+            "psrf_qqaccess_token",
+            "psrf_qqrefresh_token",
+            "wxrefresh_token",
+            "wxskey",
+        ):
+            value = self._cookie_values.get(name, "")
+            if value:
+                return value
+        return ""
 
     async def _post(self, url: str, body: str, headers: dict[str, str] | None = None, use_cookie: bool = True) -> dict[str, Any]:
         """通用 POST 请求方法"""
@@ -135,38 +165,55 @@ class QQMusicClient:
             songmid: 歌曲 MID（字符串）
             quality: 歌曲品质（字符串），有 m4a、128、320（默认）可选
         """
-        prefix = "C400" if quality.lower() == "m4a" else ("M500" if quality == "128" else "M800")
-        suffix = "m4a" if quality.lower() == "m4a" else "mp3"
-        
-        # 使用真实的 uin，如果没有则使用 "0"
+        normalized_quality = quality.lower().strip()
+        if normalized_quality == "m4a":
+            file_templates = (("C400", "m4a"), ("M500", "mp3"))
+        elif normalized_quality == "128":
+            file_templates = (("M500", "mp3"), ("C400", "m4a"))
+        else:
+            # QQ can reject a 320k URL for non-VIP users even when the same
+            # track is playable at 128k/AAC, so request compatible fallbacks
+            # in the same signed vkey response.
+            file_templates = (("M800", "mp3"), ("M500", "mp3"), ("C400", "m4a"))
+
+        filenames = [f"{prefix}{songmid}{songmid}.{suffix}" for prefix, suffix in file_templates]
         uin = self._uin or "0"
         g_tk = self._get_gtk()
+        music_auth_key = self._get_music_auth_key()
+        comm: dict[str, Any] = {
+            "uin": uin,
+            "format": "json",
+            "ct": 19 if music_auth_key else 24,
+            "cv": 0,
+            "g_tk": g_tk,
+        }
+        if music_auth_key:
+            comm["authst"] = music_auth_key
         
         body = {
             "req_1": {
                 "module": "vkey.GetVkeyServer",
                 "method": "CgiGetVkey",
                 "param": {
-                    "filename": [f"{prefix}{songmid}{songmid}.{suffix}"],
-                    "guid": "10000",
-                    "songmid": [songmid],
-                    "songtype": [0],
+                    "filename": filenames,
+                    "guid": str(10_000_000 + secrets.randbelow(90_000_000)),
+                    "songmid": [songmid] * len(filenames),
+                    "songtype": [0] * len(filenames),
                     "uin": uin,
                     "loginflag": 1,
                     "platform": "20"
                 }
             },
             "loginUin": uin,
-            "comm": {
-                "uin": uin,
-                "format": "json",
-                "ct": 24,
-                "cv": 0,
-                "g_tk": g_tk
-            }
+            "comm": comm,
         }
         
-        logger.debug("Building QQ Music request: authenticated=%s", bool(self._uin))
+        logger.debug(
+            "Building QQ Music vkey request: authenticated=%s, music_key=%s, candidates=%d",
+            bool(self._uin),
+            bool(music_auth_key),
+            len(filenames),
+        )
         
         headers = {
             "accept": "application/json, text/plain, */*",
@@ -487,16 +534,16 @@ class QQMusicClient:
             midurlinfo = req_data.get("midurlinfo", [])
             
             if sip and midurlinfo:
-                midurl_item = midurlinfo[0]
-                
-                # 优先使用完整播放链接
-                if midurl_item.get("purl"):
-                    url = sip[0] + midurl_item["purl"]
-                    return url
-                
-                # 如果没有完整链接，尝试试听链接
-                if midurl_item.get("opi30surl"):
-                    return midurl_item["opi30surl"]
+                # The response mirrors the filename order.  Prefer the first
+                # actually playable candidate instead of failing on a VIP-only
+                # high-bitrate entry.
+                for midurl_item in midurlinfo:
+                    if midurl_item.get("purl"):
+                        return sip[0] + midurl_item["purl"]
+
+                for midurl_item in midurlinfo:
+                    if midurl_item.get("opi30surl"):
+                        return midurl_item["opi30surl"]
                 
                 # 检查其他可用的链接
                 for key in ["opi48kurl", "opi96kurl", "opi128kurl", "opi192kurl"]:

@@ -13,6 +13,45 @@ def encoded(text: str) -> str:
 
 
 class QQMusicLyricTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vkey_request_uses_session_key_dynamic_guid_and_fallbacks(self):
+        client = QQMusicClient()
+        client.set_cookie("uin=o123456; qm_keyst=playback-session")
+        client._post = AsyncMock(return_value={})
+
+        await client.get_music_url("song-mid", "320")
+
+        request_body = json.loads(client._post.await_args.args[1])
+        params = request_body["req_1"]["param"]
+        self.assertEqual(params["filename"], [
+            "M800song-midsong-mid.mp3",
+            "M500song-midsong-mid.mp3",
+            "C400song-midsong-mid.m4a",
+        ])
+        self.assertEqual(params["songmid"], ["song-mid"] * 3)
+        self.assertRegex(params["guid"], r"^[1-9][0-9]{7}$")
+        self.assertNotEqual(params["guid"], "10000")
+        self.assertEqual(request_body["comm"]["authst"], "playback-session")
+        self.assertEqual(request_body["comm"]["ct"], 19)
+
+    async def test_vkey_url_uses_first_playable_quality_fallback(self):
+        client = QQMusicClient()
+        client.get_music_url = AsyncMock(return_value={
+            "req_1": {
+                "data": {
+                    "sip": ["https://stream.example/"],
+                    "midurlinfo": [
+                        {"filename": "M800x.mp3", "purl": ""},
+                        {"filename": "M500x.mp3", "purl": "signed-128.mp3"},
+                    ],
+                }
+            }
+        })
+
+        self.assertEqual(
+            await client.get_music_url_simple("song-mid"),
+            "https://stream.example/signed-128.mp3",
+        )
+
     def test_decodes_base64_and_plain_lrc(self):
         lrc = "[00:01.00]Hello &amp; goodbye"
         self.assertEqual(_decode_qq_lyric_text(encoded(lrc)), "[00:01.00]Hello & goodbye")
