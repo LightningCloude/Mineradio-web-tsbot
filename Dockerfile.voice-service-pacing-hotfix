@@ -1,0 +1,6 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY voice-service/ffmpeg-realtime-wrapper.sh /usr/local/bin/ffmpeg
+RUN chmod 0755 /usr/local/bin/ffmpeg
+

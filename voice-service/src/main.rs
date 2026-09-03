@@ -1513,6 +1513,11 @@ async fn playback_loop(
         .arg("error");
     if is_network_input {
         ffmpeg
+            // Pace network inputs at their native media rate. Without this,
+            // ffmpeg downloads and decodes the whole track as fast as the CDN
+            // allows even though TeamSpeak consumes only one 20 ms frame per
+            // tick, which can saturate the host connection.
+            .arg("-re")
             .arg("-reconnect")
             .arg("1")
             .arg("-reconnect_streamed")
@@ -1562,6 +1567,11 @@ async fn playback_loop(
     // We decouple ffmpeg reads from the send cadence via a small PCM frame queue.
     let pcm_channel_capacity: usize = if cfg!(windows) { 200 } else { 50 };
     let (pcm_tx, mut pcm_rx) = mpsc::channel::<Vec<u8>>(pcm_channel_capacity);
+    // Keep the jitter buffer bounded so backpressure reaches ffmpeg. The old
+    // drain-all loop moved every queued frame into an unbounded VecDeque each
+    // tick, effectively defeating the bounded channel and allowing runaway
+    // download, decode and memory growth.
+    let pcm_buffer_limit: usize = if cfg!(windows) { 30 } else { 12 };
 
     let encoder = Encoder::new(
         audiopus::SampleRate::Hz48000,
@@ -1667,7 +1677,10 @@ async fn playback_loop(
             _ = ticker.tick() => {}
         }
 
-        while let Ok(frame) = pcm_rx.try_recv() {
+        while pcm_buf.len() < pcm_buffer_limit {
+            let Ok(frame) = pcm_rx.try_recv() else {
+                break;
+            };
             if frame.len() == frame_bytes {
                 pcm_buf.push_back(frame);
             }

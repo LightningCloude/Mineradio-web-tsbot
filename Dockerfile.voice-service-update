@@ -1,0 +1,23 @@
+ARG BASE_IMAGE
+FROM rust:1.88-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY voice-service /app/voice-service
+COPY proto /app/proto
+COPY vendor /app/vendor
+
+RUN cargo build --manifest-path /app/voice-service/Cargo.toml --release --locked
+
+# Incremental production updates reuse the already verified voice runtime so
+# an application-only fix does not reinstall FFmpeg and its large dependency
+# tree. The deployment must explicitly provide this argument.
+FROM ${BASE_IMAGE}
+
+COPY --from=builder /app/voice-service/target/release/voice-service /usr/local/bin/voice-service
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/tsbot/
+COPY LICENSES /usr/share/licenses/tsbot/LICENSES
