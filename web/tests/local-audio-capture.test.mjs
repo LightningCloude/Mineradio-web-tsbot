@@ -42,8 +42,9 @@ test('system audio capture connects the stream and stops every track cleanly', a
   const calls = [];
   const capture = new LocalAudioCapture({
     analyzer: {
+      async prepare() { calls.push(['prepare']); return true; },
       connectStream(value) { calls.push(['connect', value]); return true; },
-      async resume() { calls.push(['resume']); },
+      async resume() { calls.push(['resume']); return true; },
       disconnect() { calls.push(['disconnect']); },
     },
     bus: { emit(type, value) { calls.push([type, value.status]); } },
@@ -56,6 +57,8 @@ test('system audio capture connects the stream and stops every track cleanly', a
   assert.equal(capture.active, true);
   assert.equal(capture.preferred, true);
   assert.equal(stream.videoTracks[0].enabled, false);
+  assert.equal(calls.findIndex(call => call[0] === 'prepare')
+    < calls.findIndex(call => call[0] === 'connect'), true);
   assert.equal(calls.some(call => call[0] === 'connect' && call[1] === stream), true);
 
   capture.stop('closed', { forget: true });
@@ -63,6 +66,26 @@ test('system audio capture connects the stream and stops every track cleanly', a
   assert.equal(capture.preferred, false);
   assert.equal(stream.getTracks().every(item => item.stopped), true);
   assert.equal(calls.some(call => call[0] === 'disconnect'), true);
+});
+
+test('capture does not claim success when autoplay policy suspends Web Audio', async () => {
+  const stream = streamWith();
+  const capture = new LocalAudioCapture({
+    analyzer: {
+      async prepare() { return false; },
+      connectStream() { return true; },
+      async resume() { return false; },
+      disconnect() {},
+    },
+    bus: { emit() {} },
+    mediaDevices: { async getDisplayMedia() { return stream; } },
+    storage: memoryStorage(),
+    secureContext: true,
+  });
+
+  await assert.rejects(() => capture.start(), /音频分析/);
+  assert.equal(capture.active, false);
+  assert.equal(stream.getTracks().every(item => item.stopped), true);
 });
 
 test('capture rejects insecure pages and shares without an audio track', async () => {

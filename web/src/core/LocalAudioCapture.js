@@ -61,9 +61,14 @@ export class LocalAudioCapture {
       throw new Error('当前浏览器不支持系统音频捕获，请使用最新版 Chrome 或 Edge');
     }
 
+    // Start/resume Web Audio before the first await consumes the click's
+    // transient user activation. The prepared context is reused after the
+    // display chooser resolves.
+    const preparePromise = this.analyzer.prepare?.();
     this._setStatus('requesting', '请选择屏幕并勾选“共享系统音频”');
     let stream;
     try {
+      await preparePromise;
       stream = await this.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 1, max: 2 } },
         audio: {
@@ -98,7 +103,13 @@ export class LocalAudioCapture {
       this._setStatus('idle', '音频分析器连接失败');
       throw new Error('无法连接本地音频分析器');
     }
-    await this.analyzer.resume();
+    const running = await this.analyzer.resume();
+    if (running === false) {
+      stopTracks(stream);
+      this.analyzer.disconnect();
+      this._setStatus('idle', '浏览器暂停了音频分析，请点击按钮重新授权');
+      throw new Error('浏览器未允许音频分析运行，请点击按钮重新授权');
+    }
 
     this.stream = stream;
     try { this.storage?.setItem(LOCAL_AUDIO_CAPTURE_PREFERENCE, '1'); } catch (_) { /* ignore */ }

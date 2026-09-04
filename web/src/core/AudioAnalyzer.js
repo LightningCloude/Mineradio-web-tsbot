@@ -170,10 +170,15 @@ export class AudioAnalyzer {
    */
   connectStream(stream) {
     if (this._connected && this._stream === stream) return true;
-    this.disconnect();
+    // Keep a context primed during the button gesture alive while replacing
+    // graph nodes. Creating a fresh context after the display chooser closes
+    // can leave it permanently suspended under Chromium autoplay policy.
+    this.disconnect({ suspendContext: false });
 
     try {
-      this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!this._ctx || this._ctx.state === 'closed') {
+        this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+      }
       this._source = this._ctx.createMediaStreamSource(stream);
       this._analyser = this._ctx.createAnalyser();
       this._analyser.fftSize = FFT_SIZE;
@@ -201,7 +206,7 @@ export class AudioAnalyzer {
     }
   }
 
-  disconnect() {
+  disconnect({ suspendContext = true } = {}) {
     if (this._source) {
       try { this._source.disconnect(); } catch (e) { /* ignore */ }
     }
@@ -211,7 +216,7 @@ export class AudioAnalyzer {
     if (this._silentGain) {
       try { this._silentGain.disconnect(); } catch (e) { /* ignore */ }
     }
-    if (this._ctx && this._ctx.state !== 'closed') {
+    if (suspendContext && this._ctx && this._ctx.state !== 'closed') {
       // Don't close — might be reused. Just suspend.
       try { this._ctx.suspend(); } catch (e) { /* ignore */ }
     }
@@ -232,8 +237,18 @@ export class AudioAnalyzer {
     }
   }
 
+  /** Prime Web Audio synchronously from the capture button's user gesture. */
+  async prepare() {
+    if (!this._ctx || this._ctx.state === 'closed') {
+      this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    await this._ensureRunning();
+    return this._ctx.state === 'running';
+  }
+
   async resume() {
     await this._ensureRunning();
+    return this._ctx?.state === 'running';
   }
 
   _hasLiveInput() {
