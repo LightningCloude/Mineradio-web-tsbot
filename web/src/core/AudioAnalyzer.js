@@ -384,7 +384,15 @@ export class AudioAnalyzer {
     this._updateVisualFrame(visualRaw, dt, lowNorm, bodyNorm, snapNorm);
 
     // ── Tempo tracking ──
-    const nowT = audioEl.currentTime || 0;
+    // Media elements expose the playback position directly. A system-audio
+    // MediaStream does not, so use the AudioContext's monotonic clock instead.
+    // Referencing the old local `audioEl` variable here made every capture
+    // frame throw and stopped the renderer as soon as capture was enabled.
+    const mediaTime = Number(this._audioEl?.currentTime);
+    const contextTime = Number(this._ctx.currentTime);
+    const nowT = Number.isFinite(mediaTime)
+      ? mediaTime
+      : (Number.isFinite(contextTime) ? contextTime : 0);
     this._primedFrames++;
     const warmingUp = nowT < this._warmupUntil || this._primedFrames < 18;
 

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { LocalAudioCapture } from '../src/core/LocalAudioCapture.js';
+import { AudioAnalyzer } from '../src/core/AudioAnalyzer.js';
 
 function track(kind) {
   return {
@@ -78,6 +79,24 @@ test('capture rejects insecure pages and shares without an audio track', async (
   });
   await assert.rejects(() => noAudio.start(), /没有检测到系统音频/);
   assert.equal(silentStream.getTracks().every(item => item.stopped), true);
+});
+
+test('a live capture frame uses the AudioContext clock without stopping the render loop', () => {
+  const analyzer = new AudioAnalyzer();
+  const audioTrack = track('audio');
+  analyzer._connected = true;
+  analyzer._stream = { getAudioTracks: () => [audioTrack] };
+  analyzer._ctx = { sampleRate: 48000, currentTime: 12.5 };
+  analyzer._analyser = {
+    fftSize: 2048,
+    getByteFrequencyData(data) { data.fill(0); },
+    getByteTimeDomainData(data) { data.fill(128); },
+  };
+  analyzer._freqData = new Uint8Array(1024);
+  analyzer._timeData = new Uint8Array(1024);
+
+  assert.doesNotThrow(() => analyzer.tick(1 / 60));
+  assert.equal(analyzer._primedFrames, 1);
 });
 
 test('the analyzer accepts live MediaStreams without replaying captured audio', async () => {

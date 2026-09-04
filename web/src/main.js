@@ -109,7 +109,19 @@ function init() {
   // ── Render loop — includes AudioAnalyzer tick ──
   particleStage.onFrame((dt) => {
     // Analyze first so a real-time beat can be distributed in the same frame.
-    audioAnalyzer.tick(dt);
+    try {
+      audioAnalyzer.tick(dt);
+    } catch (error) {
+      // A capture/analyser failure must never terminate the shared render loop.
+      console.error('[LocalAudioCapture] Frame analysis failed:', error);
+      if (localAudioCapture.active) {
+        localAudioCapture.stop('本地音频分析异常，已自动关闭');
+        eventBus.emit('toast', {
+          message: '本地音频分析异常，已自动关闭',
+          level: 'error',
+        });
+      }
+    }
     const beatActive = state.playback.status === 'playing'
       || state.playback.status === 'started';
     const position = state.getInterpolatedPosition();
