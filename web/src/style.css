@@ -427,7 +427,7 @@ html.glass-svg-ok .vis-settings-panel {
 .vis-settings-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(3px); }
 .vis-settings-panel {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 90vw; max-width: 380px;
+  width: 90vw; max-width: 380px; max-height: 90vh; overflow: hidden;
   background: var(--bg-surface); border: 1px solid var(--border);
   border-radius: 16px; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5);
@@ -435,7 +435,7 @@ html.glass-svg-ok .vis-settings-panel {
 .vis-settings-header { display: flex; justify-content: space-between; align-items: center; }
 .vis-settings-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); }
 .vis-settings-close { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.1rem; }
-.vis-settings-body { display: flex; flex-direction: column; gap: 1rem; }
+.vis-settings-body { display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; padding-right: 3px; }
 .vis-slider-group { display: flex; flex-direction: column; gap: 0.3rem; }
 .vis-slider-label { font-size: 0.78rem; color: var(--text-secondary); display: flex; justify-content: space-between; }
 .vis-slider-val { color: var(--accent-mint); font-weight: 600; min-width: 32px; text-align: right; }
@@ -495,6 +495,26 @@ html.glass-svg-ok .vis-settings-panel {
   min-height: 1em; padding-left: 2px;
   color: rgba(255,255,255,0.42); font-size: 0.68rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vis-local-audio-row { display: flex; align-items: center; gap: 9px; }
+.vis-local-audio-indicator {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(255,255,255,0.18);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.025);
+}
+.vis-local-audio-indicator.active {
+  background: rgba(126,255,205,0.92);
+  box-shadow: 0 0 0 3px rgba(126,255,205,0.10), 0 0 12px rgba(126,255,205,0.42);
+}
+.vis-local-audio-indicator.requesting {
+  background: rgba(255,218,124,0.9);
+  animation: local-audio-pulse 1s ease-in-out infinite alternate;
+}
+.vis-local-audio-status { color: rgba(255,255,255,0.64); font-size: 0.7rem; line-height: 1.4; }
+.vis-local-audio-help { color: rgba(255,255,255,0.38); font-size: 0.66rem; line-height: 1.5; }
+@keyframes local-audio-pulse { to { opacity: 0.38; transform: scale(0.78); } }
+@media (prefers-reduced-motion: reduce) {
+  .vis-local-audio-indicator.requesting { animation: none; }
 }
 
 /* Visual preset selector */

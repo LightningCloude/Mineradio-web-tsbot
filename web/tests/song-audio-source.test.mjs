@@ -8,12 +8,12 @@ import {
   resolveSongAudioSource,
 } from '../src/core/SongAudioSource.js';
 
-test('QQ source_url is accepted as the primary browser analysis stream', () => {
+test('audio sources remain direct and are never rewritten through the server', () => {
   assert.equal(resolveSongAudioSource({ source_url: 'https://audio.test/track.mp3' }), 'https://audio.test/track.mp3');
   assert.equal(resolveSongAudioSource({ audio_url: 'https://audio.test/legacy.mp3' }), 'https://audio.test/legacy.mp3');
   assert.equal(
     resolveSongAnalysisSource({ source_url: 'http://aqqmusic.tc.qq.com/M800abc.mp3?vkey=one' }),
-    '/audio/qq/M800abc.mp3?vkey=one',
+    'http://aqqmusic.tc.qq.com/M800abc.mp3?vkey=one',
   );
   assert.equal(
     resolveSongAnalysisSource({ source_url: 'https://audio.test/direct.mp3' }),
@@ -30,26 +30,16 @@ test('sparse WebSocket songs inherit the matching stream URL only', () => {
   assert.equal(inheritSongAudioSource({ track_id: 3 }, previous, queue).source_url, queue[0].source_url);
 });
 
-test('initial status and playback lifecycle activate real song analysis safely', async () => {
+test('playback uses local capture or cached analysis without full-track proxy downloads', async () => {
   const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-  const analyzer = await readFile(new URL('../src/core/OfflineBeatAnalyzer.js', import.meta.url), 'utf8');
   assert.match(main, /source_url: status\.now_playing_source_url/);
-  assert.match(main, /resolveSongAnalysisSource\(song\)/);
   assert.match(main, /await localBeatAnalysisCache\.get\(song\)/);
-  assert.match(main, /await localBeatAnalysisCache\.set\(song, result\)/);
-  assert.ok(
-    main.indexOf('await localBeatAnalysisCache.get(song)')
-      < main.indexOf('offlineBeatAnalyzer.analyze('),
-  );
-  assert.doesNotMatch(main, /api\.getBeatAnalysis|api\.storeBeatAnalysis|shared-cache/);
+  assert.match(main, /localAudioCapture\.active/);
+  assert.match(main, /local-audio:capture-changed/);
+  assert.doesNotMatch(main, /offlineBeatAnalyzer|OfflineBeatAnalyzer|resolveSongAnalysisSource/);
+  assert.doesNotMatch(main, /new Audio\(|_tryMirrorPlayback|\/audio\/qq/);
   assert.match(main, /_preparedTrackId !== trackId/);
   assert.match(main, /const active = playback\.status === 'playing' \|\| playback\.status === 'started'/);
-  assert.ok(
-    main.indexOf('_tryAnalyzeSongOffline(song, trackId);')
-      < main.indexOf("const active = playback.status === 'playing' || playback.status === 'started'"),
-    'offline analysis must start before the playing-only audio mirror guard',
-  );
-  assert.match(main, /eventBus\.on\('playback:paused',[\s\S]*?_analysisAudio\.pause\(\);[\s\S]*?\}\);/);
   assert.match(main, /setSectionEnergy\(beatEngine\.getSectionEnergyAt\(position\)\)/);
   assert.match(main, /visualAudioAdapter\.setAnalysisPending\(true\)/);
   assert.match(main, /visualAudioAdapter\.setAnalysisPending\(false\)/);
@@ -57,12 +47,7 @@ test('initial status and playback lifecycle activate real song analysis safely',
   assert.match(main, /_analysisReadyTrackId = trackId;[\s\S]*setAnalysisPending\(false\)/);
   assert.match(main, /!visualAudioAdapter\.isAnalysisPending\(\) \|\| beatEngine\.isRealtimeActive\(\)/);
   assert.match(main, /beatEngine\.clearBeatGrid\(\)/);
-  assert.doesNotMatch(analyzer, /beatEngine\.loadBeatGrid\(map\.beats\)/);
-  assert.match(analyzer, /sectionEnergy: sectionRel/);
-  assert.match(analyzer, /bodySum \+= x \* x/);
   const nginx = await readFile(new URL('../../docker/nginx-web.conf', import.meta.url), 'utf8');
-  assert.match(nginx, /location \/audio\/qq\//);
-  assert.match(nginx, /proxy_pass http:\/\/aqqmusic\.tc\.qq\.com/);
-  assert.doesNotMatch(nginx, /proxy_pass \$|proxy_pass.*\$arg/);
+  assert.doesNotMatch(nginx, /location \/audio\/qq|aqqmusic\.tc\.qq\.com|analysis_audio_cache/);
   assert.doesNotMatch(nginx, /visual\/beat-cache/);
 });

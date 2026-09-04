@@ -85,6 +85,8 @@ export class AudioAnalyzer {
     this._timeData = null;
     this._connected = false;
     this._audioEl = null;
+    this._stream = null;
+    this._silentGain = null;
 
     // ── Band state (fast/slow followers, peaks, previous) ──
     this._bands = {};
@@ -161,6 +163,44 @@ export class AudioAnalyzer {
     }
   }
 
+  /**
+   * Connect to a user-approved system/tab audio capture stream.
+   * Captured audio is routed through a zero-gain sink so it is analyzed but
+   * never replayed by the page on top of the user's TeamSpeak output.
+   */
+  connectStream(stream) {
+    if (this._connected && this._stream === stream) return true;
+    this.disconnect();
+
+    try {
+      this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this._source = this._ctx.createMediaStreamSource(stream);
+      this._analyser = this._ctx.createAnalyser();
+      this._analyser.fftSize = FFT_SIZE;
+      this._analyser.smoothingTimeConstant = SMOOTHING;
+
+      this._silentGain = this._ctx.createGain();
+      this._silentGain.gain.value = 0;
+      this._source.connect(this._analyser);
+      this._analyser.connect(this._silentGain);
+      this._silentGain.connect(this._ctx.destination);
+
+      this._freqData = new Uint8Array(this._analyser.frequencyBinCount);
+      this._timeData = new Uint8Array(this._analyser.frequencyBinCount);
+      this._connected = true;
+      this._audioEl = null;
+      this._stream = stream;
+      this._reset();
+      this._ensureRunning();
+      console.log('[AudioAnalyzer] Connected to local capture stream');
+      return true;
+    } catch (e) {
+      console.error('[AudioAnalyzer] Failed to connect capture stream:', e);
+      this.disconnect();
+      return false;
+    }
+  }
+
   disconnect() {
     if (this._source) {
       try { this._source.disconnect(); } catch (e) { /* ignore */ }
@@ -168,14 +208,19 @@ export class AudioAnalyzer {
     if (this._analyser) {
       try { this._analyser.disconnect(); } catch (e) { /* ignore */ }
     }
+    if (this._silentGain) {
+      try { this._silentGain.disconnect(); } catch (e) { /* ignore */ }
+    }
     if (this._ctx && this._ctx.state !== 'closed') {
       // Don't close — might be reused. Just suspend.
       try { this._ctx.suspend(); } catch (e) { /* ignore */ }
     }
     this._source = null;
     this._analyser = null;
+    this._silentGain = null;
     this._connected = false;
     this._audioEl = null;
+    this._stream = null;
   }
 
   /**
@@ -185,6 +230,18 @@ export class AudioAnalyzer {
     if (this._ctx && this._ctx.state === 'suspended') {
       try { await this._ctx.resume(); } catch (e) { /* ignore */ }
     }
+  }
+
+  async resume() {
+    await this._ensureRunning();
+  }
+
+  _hasLiveInput() {
+    if (this._audioEl) return !this._audioEl.paused && !this._audioEl.ended;
+    if (!this._stream) return false;
+    return this._stream.getAudioTracks().some(track =>
+      track.enabled && track.readyState === 'live'
+    );
   }
 
   _reset() {
@@ -230,8 +287,7 @@ export class AudioAnalyzer {
    */
   tick(dt) {
     if (!this._connected || !this._analyser || !this._ctx) return null;
-    const audioEl = this._audioEl;
-    if (!audioEl || audioEl.paused) return null;
+    if (!this._hasLiveInput()) return null;
 
     dt = Math.max(0.001, Math.min(0.080, dt || 0.016));
 
@@ -528,7 +584,7 @@ export class AudioAnalyzer {
 
   /** Return a recent immutable FFT frame, or null when live audio is absent. */
   getVisualFrame(maxAgeMs = 250) {
-    if (!this._connected || !this._audioEl || this._audioEl.paused || !this._visualFrame) {
+    if (!this._connected || !this._hasLiveInput() || !this._visualFrame) {
       return null;
     }
     if (performance.now() - this._visualFrameAt > maxAgeMs) return null;

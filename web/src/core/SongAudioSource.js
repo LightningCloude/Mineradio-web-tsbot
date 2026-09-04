@@ -10,19 +10,12 @@ export function resolveSongAudioSource(song) {
   return song.source_url || song.audio_url || song.url || null;
 }
 
-/** Route QQ audio through the fixed same-origin proxy used for browser analysis. */
+/**
+ * Return the provider URL directly. Full-track same-origin proxying was
+ * retired because it consumed the server's bandwidth during local analysis.
+ */
 export function resolveSongAnalysisSource(song) {
-  const source = resolveSongAudioSource(song);
-  if (!source) return null;
-  try {
-    const parsed = new URL(source, globalThis.location?.href || 'http://localhost/');
-    if (parsed.hostname.toLowerCase() === 'aqqmusic.tc.qq.com') {
-      return `/audio/qq${parsed.pathname}${parsed.search}`;
-    }
-  } catch (_) {
-    return source;
-  }
-  return source;
+  return resolveSongAudioSource(song);
 }
 
 /** Preserve the direct stream URL when sparse WebSocket song payloads arrive. */

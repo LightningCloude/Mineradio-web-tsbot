@@ -20,9 +20,10 @@ import {
 
 /** Visual tweaks panel — particle intensity, rotation, lyric color, etc. */
 export class VisualSettings {
-  constructor(container, particleStage) {
+  constructor(container, particleStage, localAudioCapture = null) {
     this.container = container;
     this._stage = particleStage;
+    this._localAudioCapture = localAudioCapture;
     this._bgBlobUrl = null;
     this._bgHasVideo = false;
     this._releaseBgBlobUrl = this._releaseBgBlobUrl.bind(this);
@@ -33,6 +34,9 @@ export class VisualSettings {
     });
     eventBus.on('lyric:colorChanged', () => this._refreshColorGrid());
     eventBus.on('lyric:translationChanged', () => this._refreshTranslationMode());
+    eventBus.on('local-audio:capture-changed', (snapshot) => {
+      this._refreshLocalAudioCapture(snapshot);
+    });
     this._restorePreset();
   }
 
@@ -64,6 +68,19 @@ export class VisualSettings {
           <div class="vis-slider-group">
             <label class="vis-slider-label">旋转幅度 <span class="vis-slider-val" data-key="rotation">1.0</span></label>
             <input type="range" class="vis-slider" data-key="rotation" min="0" max="3.0" step="0.05" value="1.0" />
+          </div>
+
+          <!-- ── Local system audio ── -->
+          <div class="vis-section-label">音频响应</div>
+          <div class="vis-local-audio-row">
+            <button type="button" class="vis-bg-btn" id="local-audio-capture-btn">
+              启用本地音频
+            </button>
+            <span class="vis-local-audio-indicator" id="local-audio-indicator"></span>
+          </div>
+          <div class="vis-local-audio-status" id="local-audio-capture-status" aria-live="polite"></div>
+          <div class="vis-local-audio-help">
+            选择整个屏幕并勾选“共享系统音频”。启用后直接分析本机听到的 TeamSpeak 音频，不再下载歌曲进行分析。
           </div>
 
           <!-- ── Background ── -->
@@ -107,6 +124,27 @@ export class VisualSettings {
     // ── backdrop + close ──
     this.container.querySelector('.vis-settings-backdrop').addEventListener('click', () => state.toggleUI('visualSettingsOpen'));
     this.container.querySelector('.vis-settings-close').addEventListener('click', () => state.toggleUI('visualSettingsOpen'));
+
+    const localAudioBtn = this.container.querySelector('#local-audio-capture-btn');
+    localAudioBtn.addEventListener('click', async () => {
+      const capture = this._localAudioCapture;
+      if (!capture || capture.status === 'requesting') return;
+      if (capture.active) {
+        capture.stop('本地音频捕获已关闭', { forget: true });
+        eventBus.emit('toast', { message: '已关闭本地音频响应', level: 'info' });
+        return;
+      }
+      try {
+        await capture.start();
+        eventBus.emit('toast', { message: '已启用本地系统音频响应', level: 'success' });
+      } catch (error) {
+        eventBus.emit('toast', {
+          message: error?.message || '本地音频捕获失败',
+          level: 'error',
+        });
+      }
+    });
+    this._refreshLocalAudioCapture();
 
     // ── sliders → ParticleStage ──
     this.container.querySelectorAll('.vis-slider').forEach(slider => {
@@ -380,6 +418,34 @@ export class VisualSettings {
       btn.classList.toggle('active', active);
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
     });
+  }
+
+  _refreshLocalAudioCapture(snapshot = this._localAudioCapture?.snapshot?.()) {
+    const btn = this.container.querySelector('#local-audio-capture-btn');
+    const status = this.container.querySelector('#local-audio-capture-status');
+    const indicator = this.container.querySelector('#local-audio-indicator');
+    if (!btn || !status || !indicator) return;
+
+    const info = snapshot || {
+      active: false,
+      supported: false,
+      secureContext: false,
+      status: 'idle',
+      message: '本地音频捕获不可用',
+    };
+    const requesting = info.status === 'requesting';
+    btn.disabled = requesting || (!info.active && !info.supported);
+    btn.textContent = requesting
+      ? '等待授权…'
+      : (info.active ? '停止本地音频' : '启用本地音频');
+    indicator.classList.toggle('active', Boolean(info.active));
+    indicator.classList.toggle('requesting', requesting);
+
+    if (info.active) status.textContent = '已连接：正在分析本机系统音频';
+    else if (!info.secureContext) status.textContent = '需要使用 HTTPS 打开网页后才能授权系统音频';
+    else if (!info.supported) status.textContent = '当前浏览器不支持，请使用最新版 Chrome 或 Edge';
+    else if (info.preferred && !info.message) status.textContent = '上次已启用，请点击按钮重新授权';
+    else status.textContent = info.message || '未启用；当前使用本地缓存或低潮模拟节拍';
   }
 
   _refreshPresetButtons(activeIdx) {
