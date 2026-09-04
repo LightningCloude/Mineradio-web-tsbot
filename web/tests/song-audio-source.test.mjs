@@ -36,6 +36,11 @@ test('playback uses local capture or cached analysis without full-track proxy do
   assert.match(main, /await localBeatAnalysisCache\.get\(song\)/);
   assert.match(main, /localAudioCapture\.active/);
   assert.match(main, /local-audio:capture-changed/);
+  assert.match(main, /capturedBeat = audioAnalyzer\.tick\(dt\)/);
+  assert.match(main, /localAudioCapture\.active && capturedBeat\?\.hit/);
+  assert.match(main, /eventBus\.emit\('visual:beat'/);
+  assert.match(main, /const visualActive = playbackActive \|\| localAudioCapture\.active/);
+  assert.match(main, /visualAudioAdapter\.tick\(dt, visualActive\)/);
   assert.doesNotMatch(main, /offlineBeatAnalyzer|OfflineBeatAnalyzer|resolveSongAnalysisSource/);
   assert.doesNotMatch(main, /new Audio\(|_tryMirrorPlayback|\/audio\/qq/);
   assert.match(main, /_preparedTrackId !== trackId/);

@@ -109,8 +109,9 @@ function init() {
   // ── Render loop — includes AudioAnalyzer tick ──
   particleStage.onFrame((dt) => {
     // Analyze first so a real-time beat can be distributed in the same frame.
+    let capturedBeat = null;
     try {
-      audioAnalyzer.tick(dt);
+      capturedBeat = audioAnalyzer.tick(dt);
     } catch (error) {
       // A capture/analyser failure must never terminate the shared render loop.
       console.error('[LocalAudioCapture] Frame analysis failed:', error);
@@ -122,20 +123,33 @@ function init() {
         });
       }
     }
-    const beatActive = state.playback.status === 'playing'
+    const playbackActive = state.playback.status === 'playing'
       || state.playback.status === 'started';
+    const visualActive = playbackActive || localAudioCapture.active;
     const position = state.getInterpolatedPosition();
+    // Capture beats use the AudioContext clock, which is independent from the
+    // server playback position. Broadcast them immediately instead of routing
+    // them through the position-based scheduler.
+    if (localAudioCapture.active && capturedBeat?.hit) {
+      eventBus.emit('visual:beat', Object.freeze({
+        ...capturedBeat,
+        type: capturedBeat.combo || 'pulse',
+        intensity: capturedBeat.strength,
+        position,
+        realtime: true,
+      }));
+    }
     // The pre-analysis substitute lives only in VisualAudioFrameAdapter. Do
     // not let the regular 120 BPM grid emit full-strength visual beat events
     // during this window; real FFT beats remain authoritative when available.
     if (!localAudioCapture.active
         && (!visualAudioAdapter.isAnalysisPending() || beatEngine.isRealtimeActive())) {
-      beatScheduler.tick(position, beatActive);
+      beatScheduler.tick(position, playbackActive);
     }
     visualAudioAdapter.setSectionEnergy(beatEngine.getSectionEnergyAt(position));
     visualAudioAdapter.setAnalyzedFrame(beatEngine.getAnalyzedFrameAt(position));
-    particleStage.setVisualAudioFrame(visualAudioAdapter.tick(dt, beatActive));
-    if (beatActive) state.syncLyrics(getLyricTimelinePosition(position));
+    particleStage.setVisualAudioFrame(visualAudioAdapter.tick(dt, visualActive));
+    if (playbackActive) state.syncLyrics(getLyricTimelinePosition(position));
 
     if (!particleStage._shelfActive) cameraDirector.tick(dt);
     lyricStage.tick(dt);
