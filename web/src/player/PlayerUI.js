@@ -3,6 +3,8 @@ import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 
+const WEB_VOLUME_MAX = 50;
+
 /**
  * Bottom playback control bar: play/pause, skip, progress bar, song info.
  * Fixed position at bottom of viewport.
@@ -55,7 +57,7 @@ export class PlayerUI {
         </div>
         <div class="player-volume">
           <svg class="svg-icon-small" viewBox="0 0 24 24" fill="currentColor" opacity="0.7"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-          <input type="range" class="volume-slider" min="0" max="200" value="10" data-action="volume" />
+          <input type="range" class="volume-slider" min="0" max="${WEB_VOLUME_MAX}" value="10" data-action="volume" />
           <span class="volume-label">10</span>
         </div>
       </div>
@@ -97,7 +99,7 @@ export class PlayerUI {
   }
 
   _setVolumeDisplay(volume) {
-    const value = Math.max(0, Math.min(200, Number(volume) || 0));
+    const value = Math.max(0, Math.min(WEB_VOLUME_MAX, Number(volume) || 0));
     const slider = this.container.querySelector('.volume-slider');
     const label = this.container.querySelector('.volume-label');
     if (slider) slider.value = String(value);
