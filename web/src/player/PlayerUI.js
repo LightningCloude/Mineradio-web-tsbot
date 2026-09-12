@@ -3,7 +3,18 @@ import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 
-const WEB_VOLUME_MAX = 50;
+const VOLUME_SLIDER_MAX = 100;
+const VOLUME_OUTPUT_MAX = 25;
+
+function sliderToOutputVolume(value) {
+  const sliderValue = Math.max(0, Math.min(VOLUME_SLIDER_MAX, Number(value) || 0));
+  return Math.round((sliderValue / VOLUME_SLIDER_MAX) * VOLUME_OUTPUT_MAX);
+}
+
+function outputToSliderVolume(value) {
+  const outputValue = Math.max(0, Math.min(VOLUME_OUTPUT_MAX, Number(value) || 0));
+  return Math.round((outputValue / VOLUME_OUTPUT_MAX) * VOLUME_SLIDER_MAX);
+}
 
 /**
  * Bottom playback control bar: play/pause, skip, progress bar, song info.
@@ -57,8 +68,8 @@ export class PlayerUI {
         </div>
         <div class="player-volume">
           <svg class="svg-icon-small" viewBox="0 0 24 24" fill="currentColor" opacity="0.7"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-          <input type="range" class="volume-slider" min="0" max="${WEB_VOLUME_MAX}" value="10" data-action="volume" />
-          <span class="volume-label">10</span>
+          <input type="range" class="volume-slider" min="0" max="${VOLUME_SLIDER_MAX}" value="40" data-action="volume" />
+          <span class="volume-label">40</span>
         </div>
       </div>
     `;
@@ -84,10 +95,12 @@ export class PlayerUI {
     const volLabel = this.container.querySelector('.volume-label');
     let volTimer;
     volSlider.addEventListener('input', () => {
-      const v = parseInt(volSlider.value);
-      volLabel.textContent = v;
+      const sliderValue = parseInt(volSlider.value, 10);
+      volLabel.textContent = sliderValue;
       clearTimeout(volTimer);
-      volTimer = setTimeout(() => api.setVolume(v).catch(() => {}), 200);
+      volTimer = setTimeout(() => {
+        api.setVolume(sliderToOutputVolume(sliderValue)).catch(() => {});
+      }, 200);
     });
 
     // ── Fullscreen exit via Esc → exit immersive mode ──
@@ -99,7 +112,7 @@ export class PlayerUI {
   }
 
   _setVolumeDisplay(volume) {
-    const value = Math.max(0, Math.min(WEB_VOLUME_MAX, Number(volume) || 0));
+    const value = outputToSliderVolume(volume);
     const slider = this.container.querySelector('.volume-slider');
     const label = this.container.querySelector('.volume-label');
     if (slider) slider.value = String(value);
