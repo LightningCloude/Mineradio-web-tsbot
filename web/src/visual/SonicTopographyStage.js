@@ -517,7 +517,7 @@ function hash01(seed) {
   return value - Math.floor(value);
 }
 
-/** Advance only the sonic terrain yaw; hide/reduced-motion callers pass zero speed. */
+/** Advance only the sonic terrain yaw; the in-app rotation slider can stop it. */
 export function advanceTerrainAutoRotation(yaw, dt, scale = 1) {
   const current = Number.isFinite(yaw) ? yaw : 0;
   const seconds = Math.max(0, Math.min(0.1, Number(dt) || 0));
@@ -872,13 +872,13 @@ export class SonicTopographyStage {
 
   update(dt, elapsed, frame) {
     if (!this.root.visible) return;
-    // Rotate the whole independent landscape group, including its boundary
-    // mist and accent objects, without touching the lyric/particle parent.
-    if (!this._reducedMotion) {
-      this.root.rotation.y = advanceTerrainAutoRotation(
-        this.root.rotation.y, dt, this._rotationScale,
-      );
-    }
+    // This deliberately user-enabled preset keeps its slow, slider-controlled
+    // yaw even when the OS requests reduced motion. The slider's 0 value is
+    // the explicit off switch; other reduced-motion effects remain unchanged.
+    // Rotate the independent terrain, mist and accents, never the lyric parent.
+    this.root.rotation.y = advanceTerrainAutoRotation(
+      this.root.rotation.y, dt, this._rotationScale,
+    );
     this._uniforms.uTime.value = elapsed;
     this._mistUniforms.uTime.value = elapsed;
     this._mistUniforms.uEnergy.value = clamp01(frame?.energy);
