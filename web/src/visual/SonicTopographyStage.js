@@ -4,8 +4,8 @@ const RIPPLE_MAX = 10;
 const FLOATING_BLOCK_MAX = 32;
 const METEOR_MAX = 6;
 const TERRAIN_LIGHT_CEILING = 0.80;
-// Mineradio's default sonicGroundAutoRotate=50 maps to 0.15 rad/s.
-const TERRAIN_AUTO_ROTATION_SPEED = 0.15;
+// 30% of the previous 0.15 rad/s default; the existing slider still scales it.
+const TERRAIN_AUTO_ROTATION_SPEED = 0.045;
 // The camera must always sit inside the terrain footprint. 168 world units
 // keeps every supported aspect ratio away from a visible outer edge while the
 // adaptive grid preserves the existing instance-count budget.

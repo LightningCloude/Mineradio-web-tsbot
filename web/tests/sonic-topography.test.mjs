@@ -17,11 +17,11 @@ import {
   advanceTerrainAutoRotation,
 } from '../src/visual/SonicTopographyStage.js';
 
-test('sonic terrain auto-rotates at the source default speed and respects the slider', async () => {
+test('sonic terrain auto-rotates at 30% of the former default and respects the slider', async () => {
   assert.equal(advanceTerrainAutoRotation(0, 1 / 60, 0), 0);
-  assert.ok(Math.abs(advanceTerrainAutoRotation(0, 1 / 60, 1) - 0.0025) < 1e-9);
-  assert.ok(Math.abs(advanceTerrainAutoRotation(0, 1 / 60, 3) - 0.0075) < 1e-9);
-  assert.equal(advanceTerrainAutoRotation(0.5, 1, 1), 0.515); // background-tab delta capped
+  assert.ok(Math.abs(advanceTerrainAutoRotation(0, 1 / 60, 1) - 0.00075) < 1e-9);
+  assert.ok(Math.abs(advanceTerrainAutoRotation(0, 1 / 60, 3) - 0.00225) < 1e-9);
+  assert.ok(Math.abs(advanceTerrainAutoRotation(0.5, 1, 1) - 0.5045) < 1e-9); // background-tab delta capped
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   const particleStage = await readFile(new URL('../src/visual/ParticleStage.js', import.meta.url), 'utf8');
   assert.match(source, /this\.root\.rotation\.y = advanceTerrainAutoRotation/);
