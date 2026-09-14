@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 const RIPPLE_MAX = 10;
 const FLOATING_BLOCK_MAX = 32;
-const METEOR_MAX = 6;
+const FALLING_DROP_MAX = 6;
 const TERRAIN_LIGHT_CEILING = 0.80;
 // 30% of the previous 0.15 rad/s default; the existing slider still scales it.
 const TERRAIN_AUTO_ROTATION_SPEED = 0.045;
@@ -526,6 +526,12 @@ export function selectTerrainHeightFloor(sectionEnergy) {
   return 0.12 * (1 - sectionDrive);
 }
 
+/** Occasional drops continue at low tide; busier sections shorten the pause. */
+export function selectFallingDropInterval(tide, unit, reducedMotion = false) {
+  const interval = 3.8 - clamp01(tide) * 1.5 + clamp01(unit) * 1.6;
+  return interval * (reducedMotion ? 1.8 : 1);
+}
+
 /** Only the quiet analysis-window pulse may stand in for an unavailable beat. */
 export function shouldSpawnLowTideDrop(frame, previousKick, secondsSinceDrop) {
   const kick = clamp01(frame?.kickEnvelope);
@@ -647,9 +653,14 @@ export class SonicTopographyStage {
     this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
     this._bands = new Array(8).fill(0);
     this._ripples = Array.from({ length: RIPPLE_MAX }, () => new THREE.Vector4(0, 0, -10, 0));
-    this._meteors = Array.from({ length: METEOR_MAX }, () => ({ active: false, age: 0, seed: 0 }));
+    this._drops = Array.from({ length: FALLING_DROP_MAX }, () => ({
+      active: false, age: 0, x: 0, z: 0, startY: 0, impactY: 0,
+      duration: 0.8, strength: 0.8,
+    }));
     this._rippleCursor = 0;
-    this._meteorCursor = 0;
+    this._dropCursor = 0;
+    this._dropSequence = 0;
+    this._nextDropAt = Infinity;
     this._beatSequence = 0;
     this._previousSyntheticKick = 0;
     this._lastSyntheticDropAt = -Infinity;
@@ -665,7 +676,7 @@ export class SonicTopographyStage {
     this._buildTerrain();
     this._buildBoundaryMist();
     this._buildFloatingBlocks();
-    this._buildMeteors();
+    this._buildFallingDrops();
   }
 
   _buildTerrain() {
@@ -769,25 +780,52 @@ export class SonicTopographyStage {
     this.root.add(this.floatingBlocks);
   }
 
-  _buildMeteors() {
-    const geometry = new THREE.BoxGeometry(0.055, 0.055, 1.15);
+  _buildFallingDrops() {
+    // A rounded head and tapered upper half form a small vertical water drop,
+    // rather than the old slanted light streak. All six share one geometry.
+    const geometry = new THREE.SphereGeometry(0.27, 8, 10);
+    const vertices = geometry.attributes.position;
+    for (let i = 0; i < vertices.count; i++) {
+      const y = vertices.getY(i);
+      if (y > 0) {
+        const taper = 1 - (y / 0.27) * 0.55;
+        vertices.setXYZ(i, vertices.getX(i) * taper, y * 2.6,
+          vertices.getZ(i) * taper);
+      }
+    }
+    vertices.needsUpdate = true;
+    geometry.computeVertexNormals();
     const material = new THREE.MeshBasicMaterial({
       color: 0xeafcff,
       transparent: true,
-      opacity: this._reducedMotion ? 0 : 0.76,
+      opacity: 0.82,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       blending: THREE.AdditiveBlending,
     });
-    this.meteorMesh = new THREE.InstancedMesh(geometry, material, METEOR_MAX);
-    this.meteorMesh.frustumCulled = false;
-    this.meteorMesh.renderOrder = 4;
-    this.root.add(this.meteorMesh);
+    this.dropMesh = new THREE.InstancedMesh(geometry, material, FALLING_DROP_MAX);
+    this.dropMesh.frustumCulled = false;
+    this.dropMesh.renderOrder = 4;
+    this.root.add(this.dropMesh);
+    const trailMaterial = material.clone();
+    trailMaterial.opacity = 0.34;
+    const trailGeometry = new THREE.CylinderGeometry(0.015, 0.075, 1.7, 5);
+    this.dropTrailMesh = new THREE.InstancedMesh(
+      trailGeometry, trailMaterial, FALLING_DROP_MAX,
+    );
+    this.dropTrailMesh.frustumCulled = false;
+    this.dropTrailMesh.renderOrder = 3;
+    this.root.add(this.dropTrailMesh);
   }
 
   setVisible(visible) {
+    const wasVisible = this.root.visible;
     this.root.visible = Boolean(visible);
+    if (this.root.visible && !wasVisible) {
+      this._nextDropAt = this._uniforms.uTime.value + 0.9;
+    }
     if (!this.root.visible) {
+      for (const drop of this._drops) drop.active = false;
       this._previousSyntheticKick = 0;
       this._beatPulse = 0;
       this._beatVisual = 0;
@@ -826,6 +864,8 @@ export class SonicTopographyStage {
     this._uniforms.uWarmColor.value.set('#c45345');
     this._uniforms.uAccentColor.value.set('#8dd8db');
     this._uniforms.uPeakColor.value.set('#efffff');
+    this.dropMesh.material.color.set('#eafcff');
+    this.dropTrailMesh.material.color.set('#eafcff');
   }
 
   setPaletteFromCanvas(canvas) {
@@ -849,6 +889,8 @@ export class SonicTopographyStage {
       this._uniforms.uCoolColor.value.setHSL((hsl.h + 0.93) % 1, Math.max(0.38, hsl.s), 0.34);
       this._uniforms.uWarmColor.value.setHSL((hsl.h + 0.08) % 1, Math.max(0.42, hsl.s), 0.44);
       this._uniforms.uPeakColor.value.copy(accent).lerp(new THREE.Color('#ffffff'), 0.60);
+      this.dropMesh.material.color.copy(accent).lerp(new THREE.Color('#ffffff'), 0.72);
+      this.dropTrailMesh.material.color.copy(this.dropMesh.material.color);
     } catch (_) {
       // Keep the stable default palette when canvas sampling is unavailable.
     }
@@ -892,11 +934,6 @@ export class SonicTopographyStage {
       // A negative strength tags the narrow, faster high-frequency wave.
       this._spawnRipple(angle, radius, 0,
         -(0.42 + high * 0.58 + profile.level * 0.62));
-      const meteor = this._meteors[this._meteorCursor];
-      meteor.active = true;
-      meteor.age = 0;
-      meteor.seed = this._beatSequence;
-      this._meteorCursor = (this._meteorCursor + 1) % METEOR_MAX;
     }
   }
 
@@ -904,6 +941,22 @@ export class SonicTopographyStage {
     const ripple = this._ripples[this._rippleCursor];
     ripple.set(Math.cos(angle) * radius, Math.sin(angle) * radius, age, power);
     this._rippleCursor = (this._rippleCursor + 1) % RIPPLE_MAX;
+  }
+
+  _spawnFallingDrop(frame) {
+    const seed = ++this._dropSequence * 13;
+    const angle = hash01(seed + 5) * Math.PI * 2;
+    const radius = selectRippleOriginRadius(hash01(seed + 11), 44, 10);
+    const drop = this._drops[this._dropCursor];
+    drop.active = true;
+    drop.age = 0;
+    drop.x = Math.cos(angle) * radius;
+    drop.z = Math.sin(angle) * radius;
+    drop.startY = 29 + hash01(seed + 17) * 9;
+    drop.impactY = -1.7;
+    drop.duration = 0.72 + hash01(seed + 23) * 0.18;
+    drop.strength = 0.72 + clamp01(frame?.energy) * 0.36;
+    this._dropCursor = (this._dropCursor + 1) % FALLING_DROP_MAX;
   }
 
   update(dt, elapsed, frame) {
@@ -982,7 +1035,13 @@ export class SonicTopographyStage {
     }
     this._previousSyntheticKick = frame?.active && frame?.source === 'synthetic' ? kick : 0;
     this._updateFloatingBlocks(elapsed, frame?.energy || 0);
-    this._updateMeteors(dt);
+    if (frame?.active && frame?.source !== 'idle' && elapsed >= this._nextDropAt) {
+      this._spawnFallingDrop(frame);
+      this._nextDropAt = elapsed + selectFallingDropInterval(
+        this._responseLevel, hash01(this._dropSequence + 67), this._reducedMotion,
+      );
+    }
+    this._updateFallingDrops(dt);
   }
 
   _updateFloatingBlocks(elapsed, energy) {
@@ -1007,39 +1066,51 @@ export class SonicTopographyStage {
     this.floatingBlocks.instanceMatrix.needsUpdate = true;
   }
 
-  _updateMeteors(dt) {
+  _updateFallingDrops(dt) {
     const matrix = new THREE.Matrix4();
+    const trailMatrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.62, 0.25, 0));
-    for (let i = 0; i < METEOR_MAX; i++) {
-      const meteor = this._meteors[i];
-      if (!meteor.active) {
+    const quaternion = new THREE.Quaternion();
+    for (let i = 0; i < FALLING_DROP_MAX; i++) {
+      const drop = this._drops[i];
+      if (!drop.active) {
         scale.setScalar(0.0001);
         matrix.compose(position.set(0, -20, 0), quaternion, scale);
+        trailMatrix.copy(matrix);
       } else {
-        meteor.age += dt;
-        const progress = meteor.age / 1.15;
+        drop.age += dt;
+        const progress = drop.age / drop.duration;
         if (progress >= 1) {
-          meteor.active = false;
+          drop.active = false;
+          const angle = Math.atan2(drop.z, drop.x);
+          const radius = Math.hypot(drop.x, drop.z);
+          // The ripple begins at the exact impact point, never at spawn time.
+          this._spawnRipple(angle, radius, 0, -drop.strength);
           scale.setScalar(0.0001);
           matrix.compose(position.set(0, -20, 0), quaternion, scale);
+          trailMatrix.copy(matrix);
         } else {
-          const seed = meteor.seed;
-          const startX = (hash01(seed + 5) - 0.5) * 72;
-          const startZ = (hash01(seed + 11) - 0.5) * 64;
-          position.set(startX + progress * 3.2, 7.5 - progress * 11.5, startZ + progress * 2.0);
-          scale.set(1, 1, 0.55 + (1 - progress) * 1.8);
+          position.set(drop.x,
+            drop.startY + (drop.impactY - drop.startY) * Math.pow(progress, 1.55),
+            drop.z);
+          scale.set(0.90, 0.95 + progress * 0.30, 0.90);
           matrix.compose(position, quaternion, scale);
+          position.y += 1.10;
+          scale.set(1, 0.75 + progress * 0.45, 1);
+          trailMatrix.compose(position, quaternion, scale);
         }
       }
-      this.meteorMesh.setMatrixAt(i, matrix);
+      this.dropMesh.setMatrixAt(i, matrix);
+      this.dropTrailMesh.setMatrixAt(i, trailMatrix);
     }
-    this.meteorMesh.instanceMatrix.needsUpdate = true;
+    this.dropMesh.instanceMatrix.needsUpdate = true;
+    this.dropTrailMesh.instanceMatrix.needsUpdate = true;
   }
 
   dispose() {
-    for (const object of [this.mesh, this.boundaryMist, this.floatingBlocks, this.meteorMesh]) {
+    for (const object of [this.mesh, this.boundaryMist, this.floatingBlocks,
+      this.dropMesh, this.dropTrailMesh]) {
       object.geometry.dispose();
       object.material.dispose();
       this.root.remove(object);

@@ -5,7 +5,9 @@ import test from 'node:test';
 import {
   selectRippleProfile,
   selectRippleOriginRadius,
+  selectFallingDropInterval,
   shouldSpawnLowTideDrop,
+  SonicTopographyStage,
   selectTerrainBeatPulse,
   shapeTerrainBeatEnvelope,
   advanceTerrainBeatEnvelope,
@@ -104,6 +106,56 @@ test('ripple origins cover the terrain disk instead of clustering at its centre'
   assert.equal(selectRippleOriginRadius(1, 64), 64);
   // Area-uniform sampling puts the midpoint well outside half-radius.
   assert.ok(selectRippleOriginRadius(0.5, 64) > 44);
+});
+
+test('falling drops stay occasional in low and high tide', () => {
+  assert.ok(selectFallingDropInterval(0, 0) >= 3.8);
+  assert.ok(selectFallingDropInterval(1, 1) >= 2.3);
+  assert.ok(selectFallingDropInterval(1, 0) < selectFallingDropInterval(0, 0));
+  assert.ok(selectFallingDropInterval(0.5, 0.5, true)
+    > selectFallingDropInterval(0.5, 0.5));
+});
+
+test('one vertical falling drop splashes only when it reaches its own ripple origin', () => {
+  const positions = [];
+  const trailPositions = [];
+  const impacts = [];
+  const stage = {
+    _drops: Array.from({ length: 6 }, () => ({ active: false, age: 0 })),
+    _dropCursor: 0,
+    _dropSequence: 0,
+    dropMesh: {
+      setMatrixAt(index, matrix) {
+        if (index === 0) positions.push([matrix.elements[12], matrix.elements[13], matrix.elements[14]]);
+      },
+      instanceMatrix: { needsUpdate: false },
+    },
+    dropTrailMesh: {
+      setMatrixAt(index, matrix) {
+        if (index === 0) trailPositions.push([matrix.elements[12], matrix.elements[13], matrix.elements[14]]);
+      },
+      instanceMatrix: { needsUpdate: false },
+    },
+    _spawnRipple(...args) { impacts.push(args); },
+  };
+  SonicTopographyStage.prototype._spawnFallingDrop.call(stage, { energy: 0.4 });
+  const drop = stage._drops[0];
+  assert.equal(drop.active, true);
+  SonicTopographyStage.prototype._updateFallingDrops.call(stage, 0.05);
+  assert.ok(Math.abs(positions[0][0] - drop.x) < 1e-5);
+  assert.ok(Math.abs(positions[0][2] - drop.z) < 1e-5);
+  assert.ok(positions[0][1] < drop.startY && positions[0][1] > drop.impactY);
+  assert.ok(Math.abs(trailPositions[0][0] - drop.x) < 1e-5);
+  assert.ok(Math.abs(trailPositions[0][2] - drop.z) < 1e-5);
+  assert.ok(trailPositions[0][1] > positions[0][1]);
+  assert.equal(impacts.length, 0);
+  SonicTopographyStage.prototype._updateFallingDrops.call(stage, drop.duration);
+  assert.equal(drop.active, false);
+  assert.equal(impacts.length, 1);
+  assert.ok(Math.abs(Math.cos(impacts[0][0]) * impacts[0][1] - drop.x) < 1e-9);
+  assert.ok(Math.abs(Math.sin(impacts[0][0]) * impacts[0][1] - drop.z) < 1e-9);
+  SonicTopographyStage.prototype._updateFallingDrops.call(stage, 1);
+  assert.equal(impacts.length, 1);
 });
 
 test('only a quiet synthetic rising edge makes a fallback water drop', () => {
