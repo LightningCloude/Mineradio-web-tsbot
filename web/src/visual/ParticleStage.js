@@ -897,6 +897,7 @@ export class ParticleStage {
 
   setRotationScale(value) {
     this._rotationScale = value;
+    this._sonicStage?.setRotationScale(value);
   }
 
   /** Switch visual preset: 0=粒子墙, 1=星河, 2=音域回响. */
@@ -921,6 +922,7 @@ export class ParticleStage {
     this._sonicStage = new SonicTopographyStage(this.renderer);
     this._sonicStage.setAmplitude(this._uniforms.uIntensity.value);
     this._sonicStage.setBrightness(this._brightnessMultiplier);
+    this._sonicStage.setRotationScale(this._rotationScale);
     if (this._coverCanvas) this._sonicStage.setPaletteFromCanvas(this._coverCanvas);
     return this._sonicStage;
   }

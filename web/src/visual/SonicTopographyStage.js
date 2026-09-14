@@ -4,6 +4,8 @@ const RIPPLE_MAX = 10;
 const FLOATING_BLOCK_MAX = 32;
 const METEOR_MAX = 6;
 const TERRAIN_LIGHT_CEILING = 0.80;
+// Mineradio's default sonicGroundAutoRotate=50 maps to 0.15 rad/s.
+const TERRAIN_AUTO_ROTATION_SPEED = 0.15;
 // The camera must always sit inside the terrain footprint. 168 world units
 // keeps every supported aspect ratio away from a visible outer edge while the
 // adaptive grid preserves the existing instance-count budget.
@@ -515,6 +517,14 @@ function hash01(seed) {
   return value - Math.floor(value);
 }
 
+/** Advance only the sonic terrain yaw; hide/reduced-motion callers pass zero speed. */
+export function advanceTerrainAutoRotation(yaw, dt, scale = 1) {
+  const current = Number.isFinite(yaw) ? yaw : 0;
+  const seconds = Math.max(0, Math.min(0.1, Number(dt) || 0));
+  const speedScale = Math.max(0, Math.min(3, Number(scale) || 0));
+  return current + seconds * TERRAIN_AUTO_ROTATION_SPEED * speedScale;
+}
+
 // Top plus four side faces prevent a dark seam when the terrain rotates. This
 // remains lighter than BoxGeometry because the permanently hidden bottom face
 // is omitted.
@@ -617,6 +627,7 @@ export class SonicTopographyStage {
     this._lowPresence = 0;
     this._amplitude = 1.2;
     this._brightness = 1;
+    this._rotationScale = 1;
     this._buildTerrain();
     this._buildBoundaryMist();
     this._buildFloatingBlocks();
@@ -770,6 +781,10 @@ export class SonicTopographyStage {
     this._uniforms.uBrightness.value = this._brightness;
   }
 
+  setRotationScale(value) {
+    this._rotationScale = Math.max(0, Math.min(3, Number(value) || 0));
+  }
+
   resetPalette() {
     this._uniforms.uBaseColor.value.set('#03060c');
     this._uniforms.uCoolColor.value.set('#1c5f91');
@@ -857,6 +872,13 @@ export class SonicTopographyStage {
 
   update(dt, elapsed, frame) {
     if (!this.root.visible) return;
+    // Rotate the whole independent landscape group, including its boundary
+    // mist and accent objects, without touching the lyric/particle parent.
+    if (!this._reducedMotion) {
+      this.root.rotation.y = advanceTerrainAutoRotation(
+        this.root.rotation.y, dt, this._rotationScale,
+      );
+    }
     this._uniforms.uTime.value = elapsed;
     this._mistUniforms.uTime.value = elapsed;
     this._mistUniforms.uEnergy.value = clamp01(frame?.energy);
