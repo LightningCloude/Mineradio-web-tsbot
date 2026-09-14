@@ -562,30 +562,27 @@ export function advanceTerrainAutoRotation(yaw, dt, scale = 1) {
   return current + seconds * TERRAIN_AUTO_ROTATION_SPEED * speedScale;
 }
 
-// Top plus four side faces prevent a dark seam when the terrain rotates. This
-// remains lighter than BoxGeometry because the permanently hidden bottom face
-// is omitted.
-function createColumnGeometry(width) {
+// Share the eight physical corners across the top and four side faces. The
+// shader uses only position, so indexing preserves the exact column shape and
+// colours while avoiding repeated noise/ripple work for 30 separate vertices.
+// The permanently hidden bottom face remains omitted.
+export function createColumnGeometry(width) {
   const half = width * 0.5;
   const positions = new Float32Array([
-    // top
-    -half, 0.5, -half,  half, 0.5, -half,  half, 0.5, half,
-    -half, 0.5, -half,  half, 0.5, half, -half, 0.5, half,
-    // x-facing side
-    half, -0.5, -half,  half, 0.5, -half,  half, 0.5, half,
-    half, -0.5, -half,  half, 0.5, half,  half, -0.5, half,
-    // z-facing side
-    -half, -0.5, half,  half, -0.5, half,  half, 0.5, half,
-    -half, -0.5, half,  half, 0.5, half, -half, 0.5, half,
-    // opposite x-facing side
-    -half, -0.5, half, -half, 0.5, half, -half, 0.5, -half,
-    -half, -0.5, half, -half, 0.5, -half, -half, -0.5, -half,
-    // opposite z-facing side
-    half, -0.5, -half, -half, -0.5, -half, -half, 0.5, -half,
-    half, -0.5, -half, -half, 0.5, -half, half, 0.5, -half,
+    -half, -0.5, -half,  half, -0.5, -half,
+     half, -0.5,  half, -half, -0.5,  half,
+    -half,  0.5, -half,  half,  0.5, -half,
+     half,  0.5,  half, -half,  0.5,  half,
   ]);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex([
+    4, 5, 6, 4, 6, 7, // top
+    1, 5, 6, 1, 6, 2, // x-facing side
+    3, 2, 6, 3, 6, 7, // z-facing side
+    3, 7, 4, 3, 4, 0, // opposite x-facing side
+    1, 0, 4, 1, 4, 5, // opposite z-facing side
+  ]);
   return geometry;
 }
 
@@ -595,15 +592,14 @@ export function selectTerrainGridSize(capabilities = {}) {
   const cores = Number(capabilities.hardwareConcurrency) || 4;
   const memory = Number(capabilities.deviceMemory) || 4;
   const viewportWidth = Number(capabilities.viewportWidth) || 1280;
-  // Keep the software tier odd so one column sits on the visual centreline;
-  // this avoids a dark seam while staying above 30 FPS in headless Chromium.
-  if (capabilities.softwareRenderer) return 45;
-  // Odd grids place one physical pillar on the visual centreline. This avoids
-  // a perspective aisle bisecting the main peak while changing load by <1%.
-  if (reducedMotion) return 193;
-  if (isMobile || cores <= 4 || memory <= 4) return 225;
-  if (capabilities.quality === 'high' && cores >= 8 && memory >= 8 && viewportWidth >= 1600) return 385;
-  return 321;
+  // About 2x the former instance count per tier (side length grows by sqrt 2).
+  // Odd grids keep a physical pillar on the centreline; the indexed column
+  // above offsets the extra instances with fewer vertex shader invocations.
+  if (capabilities.softwareRenderer) return 63;
+  if (reducedMotion) return 273;
+  if (isMobile || cores <= 4 || memory <= 4) return 319;
+  if (capabilities.quality === 'high' && cores >= 8 && memory >= 8 && viewportWidth >= 1600) return 545;
+  return 455;
 }
 
 function detectCapabilities(renderer) {

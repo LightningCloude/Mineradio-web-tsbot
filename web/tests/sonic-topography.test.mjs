@@ -15,6 +15,7 @@ import {
   selectTerrainEnergyFloor,
   selectSustainedLowFloor,
   selectTerrainGridSize,
+  createColumnGeometry,
   selectThemeColor,
   shapeSonicBand,
   advanceTerrainAutoRotation,
@@ -78,13 +79,34 @@ test('active audible playback sustains a low-frequency floor but true silence do
   }), [0, 0, 0]);
 });
 
-test('terrain quality stays conservative and has a software-renderer safety tier', () => {
-  assert.equal(selectTerrainGridSize({ softwareRenderer: true, hardwareConcurrency: 12, deviceMemory: 16 }), 45);
-  assert.equal(selectTerrainGridSize({ isMobile: true, hardwareConcurrency: 12, deviceMemory: 16 }), 225);
-  assert.equal(selectTerrainGridSize({ reducedMotion: true, hardwareConcurrency: 12, deviceMemory: 16 }), 193);
-  assert.equal(selectTerrainGridSize({ hardwareConcurrency: 6, deviceMemory: 8, viewportWidth: 1400 }), 321);
-  assert.equal(selectTerrainGridSize({ hardwareConcurrency: 12, deviceMemory: 16, viewportWidth: 1920 }), 321);
-  assert.equal(selectTerrainGridSize({ quality: 'high', hardwareConcurrency: 12, deviceMemory: 16, viewportWidth: 1920 }), 385);
+test('terrain tiers approximately double column count while retaining device fallbacks', () => {
+  const tiers = [
+    [{ softwareRenderer: true, hardwareConcurrency: 12, deviceMemory: 16 }, 45, 63],
+    [{ reducedMotion: true, hardwareConcurrency: 12, deviceMemory: 16 }, 193, 273],
+    [{ isMobile: true, hardwareConcurrency: 12, deviceMemory: 16 }, 225, 319],
+    [{ hardwareConcurrency: 6, deviceMemory: 8, viewportWidth: 1400 }, 321, 455],
+    [{ hardwareConcurrency: 12, deviceMemory: 16, viewportWidth: 1920 }, 321, 455],
+    [{ quality: 'high', hardwareConcurrency: 12, deviceMemory: 16, viewportWidth: 1920 }, 385, 545],
+  ];
+  for (const [capabilities, formerSize, expectedSize] of tiers) {
+    const actual = selectTerrainGridSize(capabilities);
+    assert.equal(actual, expectedSize);
+    assert.ok(Math.abs(actual * actual / (formerSize * formerSize) - 2) < 0.05);
+  }
+});
+
+test('indexed columns retain the same five faces with fewer shader vertices', () => {
+  const geometry = createColumnGeometry(0.8);
+  const positions = geometry.getAttribute('position');
+  const indices = geometry.getIndex().array;
+  assert.equal(positions.count, 8);
+  assert.equal(indices.length, 30);
+  for (let face = 0; face < 5; face++) {
+    const corners = new Set(indices.slice(face * 6, face * 6 + 6));
+    assert.equal(corners.size, 4);
+    assert.ok([...corners].some(index => positions.getY(index) === 0.5));
+  }
+  geometry.dispose();
 });
 
 test('ripple quantity, power and footprint rise monotonically with song tide', () => {
@@ -253,8 +275,8 @@ test('cover palette rejects white pixels and falls back when no colour remains',
 
 test('production terrain uses a dense grid with slim column footprints', async () => {
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
-  assert.match(source, /return 321/);
-  assert.match(source, /return 385/);
+  assert.match(source, /return 455/);
+  assert.match(source, /return 545/);
   assert.match(source, /createColumnGeometry\(spacing \* 0\.78\)/);
 });
 
