@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   selectRippleProfile,
   selectRippleOriginRadius,
+  shouldSpawnLowTideDrop,
   selectTerrainBeatPulse,
   shapeTerrainBeatEnvelope,
   advanceTerrainBeatEnvelope,
@@ -103,6 +104,20 @@ test('ripple origins cover the terrain disk instead of clustering at its centre'
   assert.equal(selectRippleOriginRadius(1, 64), 64);
   // Area-uniform sampling puts the midpoint well outside half-radius.
   assert.ok(selectRippleOriginRadius(0.5, 64) > 44);
+});
+
+test('only a quiet synthetic rising edge makes a fallback water drop', () => {
+  const frame = {
+    active: true, source: 'synthetic', sectionEnergy: 0.04, kickEnvelope: 0.035,
+  };
+  assert.equal(shouldSpawnLowTideDrop(frame, 0.01, Infinity), true);
+  assert.equal(shouldSpawnLowTideDrop(frame, 0.03, Infinity), false);
+  assert.equal(shouldSpawnLowTideDrop(frame, 0.01, 0.2), false);
+  assert.equal(shouldSpawnLowTideDrop({ ...frame, active: false }, 0, Infinity), false);
+  assert.equal(shouldSpawnLowTideDrop({ ...frame, source: 'analyzed' }, 0, Infinity), false);
+  assert.equal(shouldSpawnLowTideDrop({ ...frame, source: 'realtime' }, 0, Infinity), false);
+  assert.equal(shouldSpawnLowTideDrop({ ...frame, sectionEnergy: 0.5 }, 0, Infinity), false);
+  assert.equal(shouldSpawnLowTideDrop({ ...frame, kickEnvelope: 0.2 }, 0, Infinity), false);
 });
 
 test('every meaningful analyzed beat produces an independent terrain pulse', () => {
@@ -304,6 +319,12 @@ test('beat rings use a water-drop crest, trough and distance-damped wake', async
   assert.match(source, /float attack = smoothstep\(0\.0, 0\.075, impactAge\)/);
   assert.match(source, /float travelFade = exp\(-ringRadius \/ mix\(27\.0, 39\.0, ringDrive\)\)/);
   assert.doesNotMatch(source, /float travelFade = 1\.0 - smoothstep/);
+  assert.match(source, /rippleGlow = max\(rippleGlow, visibleWake \* \(1\.0 - accent\)\)/);
+  assert.match(source, /rippleWhite = max\(rippleWhite, visibleWake \* accent\)/);
+  assert.match(source, /color = mix\(color, uAccentColor \* 1\.12/);
+  assert.match(source, /color = mix\(color, vec3\(0\.92, 0\.97, 1\.0\)/);
+  assert.match(source, /this\._spawnRipple\(angle, radius, 0, 0\.54\)/);
+  assert.match(source, /color \*= uLightCeiling/);
 });
 
 test('terrain beat envelope is separate from the section tide and decays quickly', async () => {

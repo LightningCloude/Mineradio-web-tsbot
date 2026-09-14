@@ -27,6 +27,8 @@ varying float vRadius;
 varying float vSide;
 varying float vSeed;
 varying float vPeakIntensity;
+varying float vRippleGlow;
+varying float vRippleWhite;
 
 // Visual terrain functions adapted from Sonic Topography 1.1.x.  Keeping the
 // noise in the vertex shader gives every fixed instance a continuous organic
@@ -205,6 +207,8 @@ void main() {
     + uBeatPulse * (1.0 - tideHeightFloor);
 
   float rippleLift = 0.0;
+  float rippleGlow = 0.0;
+  float rippleWhite = 0.0;
   for (int i = 0; i < 10; i++) {
     vec4 ripple = uRipples[i];
     if (abs(ripple.w) <= 0.001 || ripple.z < 0.0 || ripple.z > 4.8) continue;
@@ -240,6 +244,13 @@ void main() {
     // at an outer threshold.
     float travelFade = exp(-ringRadius / mix(27.0, 39.0, ringDrive));
     float ring = waterWave * attack + impact * 0.72;
+    // Colour the crest and first impact separately from column height. The
+    // climax mound may limit displacement, but must not erase the water wake.
+    float visibleWake = (mainCrest * attack + impact * 0.78
+      + secondaryCrest * 0.13) * lifeFade * travelFade
+      * clamp(abs(ripple.w) * 0.82, 0.0, 1.0) * coverage;
+    rippleGlow = max(rippleGlow, visibleWake * (1.0 - accent));
+    rippleWhite = max(rippleWhite, visibleWake * accent);
     float elevation = mix(1.72 + ringDrive * 1.22, 0.92 + ringDrive * 0.42, accent);
     float corePriority = mix(1.0, 0.10, climaxDrive * climaxCore);
     rippleLift += ring * lifeFade * travelFade * abs(ripple.w) * elevation
@@ -266,6 +277,8 @@ void main() {
   vPeakIntensity = clamp(
     climaxDrive * climaxCore * 1.08 + centerMound * uBands[0] * 0.62,
     0.0, 1.0);
+  vRippleGlow = clamp(rippleGlow, 0.0, 1.0);
+  vRippleWhite = clamp(rippleWhite, 0.0, 1.0);
   vRadius = radius;
   vSide = 1.0 - smoothstep(-0.45, 0.50, position.y);
   vSeed = aSeed;
@@ -288,6 +301,8 @@ varying float vRadius;
 varying float vSide;
 varying float vSeed;
 varying float vPeakIntensity;
+varying float vRippleGlow;
+varying float vRippleWhite;
 
 void main() {
   float energy = clamp(vEnergy, 0.0, 1.0);
@@ -303,6 +318,12 @@ void main() {
   float edgeSpark = smoothstep(0.74, 1.0, energy) * (0.84 + vSeed * 0.16);
   color *= (0.40 + energy * 0.60 + edgeSpark * 0.14 + peakBlend * 0.18)
     * topLight * uBrightness;
+  // A narrow palette-coloured crest and a shorter white high-frequency wake
+  // remain legible even where a broad peak has priority over ripple height.
+  color = mix(color, uAccentColor * 1.12,
+    clamp(vRippleGlow * 0.68, 0.0, 0.68));
+  color = mix(color, vec3(0.92, 0.97, 1.0),
+    clamp(vRippleWhite * 0.56, 0.0, 0.56));
   // Soft highlight compression preserves the source's hot peak without
   // turning a broad chorus mound into a flat white patch on SDR displays.
   color = color / (vec3(1.0) + color * 0.28);
@@ -505,6 +526,16 @@ export function selectTerrainHeightFloor(sectionEnergy) {
   return 0.12 * (1 - sectionDrive);
 }
 
+/** Only the quiet analysis-window pulse may stand in for an unavailable beat. */
+export function shouldSpawnLowTideDrop(frame, previousKick, secondsSinceDrop) {
+  const kick = clamp01(frame?.kickEnvelope);
+  return Boolean(frame?.active && frame?.source === 'synthetic'
+    && clamp01(frame?.sectionEnergy) < 0.10
+    && kick >= 0.024 && kick <= 0.075
+    && clamp01(previousKick) < 0.024
+    && secondsSinceDrop >= 0.5);
+}
+
 /** Keep climax colour nearly steady while retaining low-tide contrast. */
 export function selectTerrainEnergyFloor(sectionEnergy) {
   const x = clamp01((clamp01(sectionEnergy) - 0.045) / 0.235);
@@ -620,6 +651,9 @@ export class SonicTopographyStage {
     this._rippleCursor = 0;
     this._meteorCursor = 0;
     this._beatSequence = 0;
+    this._previousSyntheticKick = 0;
+    this._lastSyntheticDropAt = -Infinity;
+    this._lastAnalyzedBeatAt = -Infinity;
     this._beatPulse = 0;
     this._beatVisual = 0;
     this._beatLight = 0;
@@ -754,6 +788,7 @@ export class SonicTopographyStage {
   setVisible(visible) {
     this.root.visible = Boolean(visible);
     if (!this.root.visible) {
+      this._previousSyntheticKick = 0;
       this._beatPulse = 0;
       this._beatVisual = 0;
       this._beatLight = 0;
@@ -821,6 +856,7 @@ export class SonicTopographyStage {
 
   onBeat(beat = {}) {
     if (!this.root.visible) return;
+    this._lastAnalyzedBeatAt = this._uniforms.uTime.value;
     const strength = clamp01(beat.strength ?? beat.intensity ?? 0.5);
     const low = clamp01(beat.low ?? strength * 0.8);
     const high = clamp01(beat.snap ?? strength * 0.3);
@@ -931,6 +967,20 @@ export class SonicTopographyStage {
       ripple.z += dt;
       if (ripple.z > 4.8) ripple.set(0, 0, -10, 0);
     }
+    const kick = clamp01(frame?.kickEnvelope);
+    if (shouldSpawnLowTideDrop(frame, this._previousSyntheticKick,
+      elapsed - Math.max(this._lastSyntheticDropAt, this._lastAnalyzedBeatAt))) {
+      // A single small deterministic drop during analysis startup; it never
+      // raises the beat envelope or impersonates a measured chorus.
+      this._beatSequence += 1;
+      const angle = hash01(this._beatSequence * 7 + 19) * Math.PI * 2;
+      const radius = selectRippleOriginRadius(
+        hash01(this._beatSequence * 7 + 41), 48,
+      );
+      this._spawnRipple(angle, radius, 0, 0.54);
+      this._lastSyntheticDropAt = elapsed;
+    }
+    this._previousSyntheticKick = frame?.active && frame?.source === 'synthetic' ? kick : 0;
     this._updateFloatingBlocks(elapsed, frame?.energy || 0);
     this._updateMeteors(dt);
   }
