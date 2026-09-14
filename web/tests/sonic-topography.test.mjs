@@ -128,13 +128,13 @@ test('height and light beat envelopes buffer attack and release without jumping'
   assert.ok(lightRelease > heightRelease);
 });
 
-test('climax keeps high terrain and brightness floors between beats', () => {
+test('climax uses the full height beat range while brightness remains buffered', () => {
   const low = selectTerrainHeightFloor(0);
   const middle = selectTerrainHeightFloor(0.1625);
   const climax = selectTerrainHeightFloor(1);
   assert.equal(low, 0.12);
-  assert.ok(middle > low && middle < climax);
-  assert.equal(climax, 0.8);
+  assert.ok(middle > climax && middle < low);
+  assert.equal(climax, 0);
   assert.equal(selectTerrainEnergyFloor(0), 0.24);
   assert.equal(selectTerrainEnergyFloor(1), 0.9);
 });
@@ -297,7 +297,7 @@ test('terrain beat envelope is separate from the section tide and decays quickly
   assert.match(source, /uniform float uBeatPulse/);
   assert.match(source, /uniform float uBeatLight/);
   assert.match(source, /float beatLift = uBeatPulse/);
-  assert.match(source, /float tideHeightFloor = mix\(0\.12, 0\.80, sectionDrive\)/);
+  assert.match(source, /float tideHeightFloor = mix\(0\.12, 0\.0, sectionDrive\)/);
   assert.match(source, /float tideEnergyFloor = mix\(0\.24, 0\.90, sectionDrive\)/);
   assert.match(source, /float beatHeightGate = tideHeightFloor/);
   assert.match(source, /uBeatPulse \* \(1\.0 - tideHeightFloor\)/);

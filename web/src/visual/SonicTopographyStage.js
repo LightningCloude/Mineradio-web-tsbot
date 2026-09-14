@@ -196,7 +196,9 @@ void main() {
   // Frequency and section fields define the available terrain ceiling. The
   // fast beat envelope decides how much of that ceiling is used right now, so
   // a chorus permits tall motion without holding the landscape permanently up.
-  float tideHeightFloor = mix(0.12, 0.80, sectionDrive);
+  // A climax raises the available ceiling, but no longer holds its height at
+  // 80% between beats. Keep only the existing low-tide resting floor.
+  float tideHeightFloor = mix(0.12, 0.0, sectionDrive);
   float beatHeightGate = tideHeightFloor
     + uBeatPulse * (1.0 - tideHeightFloor);
 
@@ -494,11 +496,11 @@ export function advanceTerrainBeatEnvelope(
   return from + (to - from) * (1 - Math.exp(-seconds / tau));
 }
 
-/** Low tide rests low; a full climax keeps 80% of its available height. */
+/** Low tide keeps a small resting lift; climax height spans the full beat range. */
 export function selectTerrainHeightFloor(sectionEnergy) {
   const x = clamp01((clamp01(sectionEnergy) - 0.045) / 0.235);
   const sectionDrive = x * x * (3 - 2 * x);
-  return 0.12 + sectionDrive * 0.68;
+  return 0.12 * (1 - sectionDrive);
 }
 
 /** Keep climax colour nearly steady while retaining low-tide contrast. */
