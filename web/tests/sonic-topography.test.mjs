@@ -108,12 +108,15 @@ test('ripple origins cover the terrain disk instead of clustering at its centre'
   assert.ok(selectRippleOriginRadius(0.5, 64) > 44);
 });
 
-test('falling drops stay occasional in low and high tide', () => {
-  assert.ok(selectFallingDropInterval(0, 0) >= 3.8);
-  assert.ok(selectFallingDropInterval(1, 1) >= 2.3);
+test('falling drop intervals and first delay are halved', async () => {
+  assert.equal(selectFallingDropInterval(0, 0), 1.9);
+  assert.ok(Math.abs(selectFallingDropInterval(1, 1) - 1.95) < 1e-9);
+  assert.equal(selectFallingDropInterval(1, 0), 1.15);
   assert.ok(selectFallingDropInterval(1, 0) < selectFallingDropInterval(0, 0));
   assert.ok(selectFallingDropInterval(0.5, 0.5, true)
     > selectFallingDropInterval(0.5, 0.5));
+  const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
+  assert.match(source, /this\._nextDropAt = this\._uniforms\.uTime\.value \+ 0\.45/);
 });
 
 test('one vertical falling drop splashes only when it reaches its own ripple origin', () => {

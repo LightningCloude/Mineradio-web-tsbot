@@ -528,7 +528,7 @@ export function selectTerrainHeightFloor(sectionEnergy) {
 
 /** Occasional drops continue at low tide; busier sections shorten the pause. */
 export function selectFallingDropInterval(tide, unit, reducedMotion = false) {
-  const interval = 3.8 - clamp01(tide) * 1.5 + clamp01(unit) * 1.6;
+  const interval = (3.8 - clamp01(tide) * 1.5 + clamp01(unit) * 1.6) * 0.5;
   return interval * (reducedMotion ? 1.8 : 1);
 }
 
@@ -822,7 +822,7 @@ export class SonicTopographyStage {
     const wasVisible = this.root.visible;
     this.root.visible = Boolean(visible);
     if (this.root.visible && !wasVisible) {
-      this._nextDropAt = this._uniforms.uTime.value + 0.9;
+      this._nextDropAt = this._uniforms.uTime.value + 0.45;
     }
     if (!this.root.visible) {
       for (const drop of this._drops) drop.active = false;
