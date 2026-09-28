@@ -1,6 +1,7 @@
 import { state } from '../shared/StateManager.js';
 import { eventBus } from '../shared/EventBus.js';
 import { lyricColorManager, LYRIC_COLOR_PRESETS } from '../shared/LyricColorManager.js';
+import { lyricEffectsManager } from '../shared/LyricEffectsManager.js';
 import {
   LYRIC_DISPLAY_MODES,
   lyricTranslationManager,
@@ -34,6 +35,7 @@ export class VisualSettings {
     });
     eventBus.on('lyric:colorChanged', () => this._refreshColorGrid());
     eventBus.on('lyric:translationChanged', () => this._refreshTranslationMode());
+    eventBus.on('lyric:ghostChanged', () => this._refreshLyricEffects());
     eventBus.on('local-audio:capture-changed', (snapshot) => {
       this._refreshLocalAudioCapture(snapshot);
     });
@@ -107,6 +109,12 @@ export class VisualSettings {
           <!-- ── Lyric color presets ── -->
           <div class="vis-section-label">歌词颜色</div>
           <div class="lyric-color-grid" id="lyric-color-grid"></div>
+
+          <div class="vis-section-label">歌词效果</div>
+          <label class="vis-bg-toggle">
+            <input type="checkbox" id="lyric-ghost-toggle" />
+            <span class="vis-bg-label">歌词重影</span>
+          </label>
 
           <div class="vis-section-label">歌词翻译</div>
           <div class="lyric-mode-selector" id="lyric-mode-selector"
@@ -236,6 +244,10 @@ export class VisualSettings {
       });
     });
     this._refreshTranslationMode();
+    this.container.querySelector('#lyric-ghost-toggle').addEventListener('change', (event) => {
+      lyricEffectsManager.setGhostEnabled(event.target.checked);
+    });
+    this._refreshLyricEffects();
 
     // ── Preset selector ──
     this.container.querySelectorAll('.preset-btn').forEach(btn => {
@@ -418,6 +430,11 @@ export class VisualSettings {
       btn.classList.toggle('active', active);
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
     });
+  }
+
+  _refreshLyricEffects() {
+    const toggle = this.container.querySelector('#lyric-ghost-toggle');
+    if (toggle) toggle.checked = lyricEffectsManager.ghostEnabled;
   }
 
   _refreshLocalAudioCapture(snapshot = this._localAudioCapture?.snapshot?.()) {

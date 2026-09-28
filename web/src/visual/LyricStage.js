@@ -1,6 +1,7 @@
 import { state } from '../shared/StateManager.js';
 import { eventBus } from '../shared/EventBus.js';
 import { lyricColorManager } from '../shared/LyricColorManager.js';
+import { lyricEffectsManager } from '../shared/LyricEffectsManager.js';
 import { getLyricLineProgress } from '../shared/LyricTiming.js';
 import {
   LYRIC_DISPLAY_MODES,
@@ -81,6 +82,9 @@ export class LyricStage {
     this._beatGlowTarget = 0;
     this._pendingBeatGlow = 0;
     this._currentGroup = null;
+    // Includes outgoing lines until their fade finishes, so a toggle also
+    // updates any text still on screen without restarting karaoke progress.
+    this._groups = new Set();
     this._sunTex = null;
     this._ready = false;
 
@@ -105,6 +109,7 @@ export class LyricStage {
       this._rebuildCurrentLine();
     });
     eventBus.on('lyric:translationChanged', () => this._rebuildCurrentLine());
+    eventBus.on('lyric:ghostChanged', () => this._applyGhostVisibility());
     eventBus.on('visual:beat', (beat) => this._onBeat(beat));
   }
 
@@ -115,6 +120,14 @@ export class LyricStage {
     this._clearGroup();
     this._currentIndex = -1;
     this.highlightLine(index, line);
+  }
+
+  _applyGhostVisibility() {
+    for (const group of this._groups) {
+      const { glow, translatedGlow } = group.userData;
+      if (glow) glow.visible = lyricEffectsManager.ghostEnabled;
+      if (translatedGlow) translatedGlow.visible = lyricEffectsManager.ghostEnabled;
+    }
   }
 
   _onBeat(beat) {
@@ -305,6 +318,8 @@ export class LyricStage {
     const txt = new THREE.Mesh(txtG, txtM);
     txt.renderOrder = 98;
     if (translation) txt.position.y = 0.32;
+    glow.position.y = txt.position.y;
+    glow.visible = lyricEffectsManager.ghostEnabled;
     group.add(txt);
 
     let translatedGlow = null;
@@ -326,6 +341,7 @@ export class LyricStage {
         translatedGlowM,
       );
       translatedGlow.position.set(0, -1.82, 0.005);
+      translatedGlow.visible = lyricEffectsManager.ghostEnabled;
       translatedGlow.renderOrder = 99;
       group.add(translatedGlow);
 
@@ -365,6 +381,7 @@ export class LyricStage {
       sun, glow, txt, translatedGlow, translatedText,
       worldW, worldH, text, translation, active, tex,
     };
+    this._groups.add(group);
     return group;
   }
 
@@ -382,22 +399,24 @@ export class LyricStage {
     if (!this._currentGroup) return;
 
     const d = this._currentGroup.userData;
+    // Match the existing 60 FPS response at every frame rate.
+    const glowBlend = 1 - Math.exp(-9.75 * Math.max(0, dt));
 
     // ── Sun bloom — 2× bigger pulse ──
     if (d.sun) {
       const bloomTarget = 0.48 + this._beatGlow * 3.0;
-      d.sun.material.opacity += (bloomTarget - d.sun.material.opacity) * 0.15;
+      d.sun.material.opacity += (bloomTarget - d.sun.material.opacity) * glowBlend;
     }
 
     // ── Glow layer — 2× stronger boost ──
     if (d.glow) {
       const glowTarget = 0.22 + this._beatGlow * 1.6;
-      d.glow.material.opacity += (glowTarget - d.glow.material.opacity) * 0.15;
+      d.glow.material.opacity += (glowTarget - d.glow.material.opacity) * glowBlend;
     }
     if (d.translatedGlow) {
       const translatedGlowTarget = 0.22 + this._beatGlow * 1.6;
       d.translatedGlow.material.opacity +=
-        (translatedGlowTarget - d.translatedGlow.material.opacity) * 0.15;
+        (translatedGlowTarget - d.translatedGlow.material.opacity) * glowBlend;
     }
 
     // ── Scale pulse: capped at 6.5%, with frame-rate-independent easing ──
@@ -406,6 +425,7 @@ export class LyricStage {
     if (d.txt) {
       const newS = s + (scaleTarget - s) * (1 - Math.exp(-9.0 * dt));
       d.txt.scale.set(newS, newS, 1);
+      if (d.glow) d.glow.scale.set(newS, newS, 1);
       if (d.translatedText) d.translatedText.scale.set(newS, newS, 1);
       if (d.translatedGlow) d.translatedGlow.scale.set(newS, newS, 1);
     }
@@ -516,6 +536,7 @@ export class LyricStage {
   }
 
   _dispose(g) {
+    this._groups.delete(g);
     g.traverse(c => {
       if (c.geometry) c.geometry.dispose();
       if (c.material) {
