@@ -17,8 +17,41 @@ test('continuous audio alone excites delayed elastic modes with a bounded reboun
   for (let n = 0; n < 90; n++) history.push([...motion.update(loud, 1 / 60)]);
   assert.ok(history[5][0] > history[5][1] && history[5][1] > history[5][2]);
   assert.ok(Math.max(...history.map(values => values[0])) > 1.02); // soft overshoot
-  assert.ok(history.every(values => values.every(v => v >= -0.12 && v <= 1.121)));
-  assert.ok(history[89].every(v => Math.abs(v - 1) < 0.001));
+  assert.ok(history.every(values => values.slice(0, 3)
+    .every(v => v >= -0.12 && v <= 1.121)));
+  assert.ok(history[89].slice(0, 3).every(v => Math.abs(v - 1) < 0.001));
+  assert.equal(history[89][3], 0);
+});
+
+test('every trigger creates a whole-terrain compression, rise and recoil cycle', () => {
+  const motion = new TerrainElasticMotion();
+  motion.trigger(0.35, 0.1);
+  assert.ok(motion._beatPosition < 0);
+  const firstCycle = [];
+  for (let n = 0; n < 55; n++) firstCycle.push(motion.update(null, 1 / 60)[3]);
+  assert.ok(Math.max(...firstCycle) > 0.28);
+  assert.ok(Math.min(...firstCycle) < -0.02);
+  motion.trigger(0.35, 0.1);
+  const secondCycle = [];
+  for (let n = 0; n < 55; n++) secondCycle.push(motion.update(null, 1 / 60)[3]);
+  assert.ok(Math.max(...secondCycle) > 0.28); // next beat remains visible
+  assert.ok(Math.abs(secondCycle.at(-1)) < 0.025);
+});
+
+test('rapid strong beats stack safely while reduced motion remains restrained', () => {
+  const normal = new TerrainElasticMotion();
+  const reduced = new TerrainElasticMotion();
+  for (let beat = 0; beat < 12; beat++) {
+    normal.trigger(1, 1);
+    reduced.trigger(1, 1, true);
+    for (let frame = 0; frame < 5; frame++) {
+      normal.update(loud, 1 / 60);
+      reduced.update(loud, 1 / 60, true);
+    }
+  }
+  assert.ok([...normal.values].every(Number.isFinite));
+  assert.ok(normal.values[3] >= -0.42 && normal.values[3] <= 0.92);
+  assert.ok(Math.abs(reduced.values[3]) < Math.abs(normal.values[3]));
 });
 
 test('rebound is frame-rate independent at 30, 60 and 144 Hz', () => {
@@ -39,7 +72,7 @@ test('paused, silent and absent audio settle smoothly even with stale section en
     const motion = new TerrainElasticMotion();
     advance(motion, loud, 1);
     const first = [...motion.update(frame, 1 / 60)];
-    assert.ok(first.every(v => v > 0.9)); // no snap to zero
+    assert.ok(first.slice(0, 3).every(v => v > 0.9)); // no snap to zero
     assert.ok(advance(motion, frame, 3).every(v => Math.abs(v) < 1e-5));
   }
 });
@@ -48,7 +81,8 @@ test('quiet passages remain alive; synthetic startup and reduced motion stay res
   const quiet = advance(new TerrainElasticMotion(), { ...loud,
     energy: 0.01, kickEnvelope: 0.01, subBass: 0.01, bass: 0.01,
     lowMid: 0.01, mid: 0.01, highMid: 0.01 }, 1);
-  assert.ok(quiet.every(v => v > 0 && v < 0.02));
+  assert.ok(quiet.slice(0, 3).every(v => v > 0 && v < 0.02));
+  assert.equal(quiet[3], 0);
   const fake = new TerrainElasticMotion();
   for (let n = 0; n < 180; n++) assert.ok(
     [...fake.update({ ...loud, source: 'synthetic' }, 1 / 60)].every(v => v < 0.20));
@@ -84,7 +118,8 @@ test('the real terrain update drives the shared shader buffer without discrete b
   stage._uniforms.uElastic = { value: motion.values };
   for (let n = 0; n < 30; n++) SonicTopographyStage.prototype.update.call(stage, 1 / 60, n / 60, loud);
   assert.equal(stage._uniforms.uElastic.value, motion.values);
-  assert.ok([...stage._uniforms.uElastic.value].every(v => v > 0.95));
+  assert.ok([...stage._uniforms.uElastic.value].slice(0, 3).every(v => v > 0.95));
+  assert.equal(stage._uniforms.uElastic.value[3], 0);
   assert.equal(stage._uniforms.uBeatPulse.value, 0);
   const previous = [...motion.values];
   stage.root.visible = false;
@@ -92,7 +127,7 @@ test('the real terrain update drives the shared shader buffer without discrete b
   assert.deepEqual([...motion.values], previous); // hidden preset does no work
   stage._drops = [];
   SonicTopographyStage.prototype.setVisible.call(stage, false);
-  assert.deepEqual([...motion.values], [0, 0, 0]);
+  assert.deepEqual([...motion.values], [0, 0, 0, 0]);
   stage.root.visible = true;
   SonicTopographyStage.prototype.update.call(stage, 1 / 60, 2, loud);
   assert.ok(motion.values[0] > 0 && motion.values[0] < 0.04); // soft re-entry

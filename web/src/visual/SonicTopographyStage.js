@@ -21,7 +21,7 @@ uniform float uAmplitude;
 uniform float uClimax;
 uniform float uBeatPulse;
 uniform float uBeatLight;
-uniform vec3 uElastic;
+uniform vec4 uElastic;
 uniform float uBands[8];
 uniform vec4 uRipples[10];
 varying float vEnergy;
@@ -281,11 +281,18 @@ void main() {
     + spectralLift * terrainHeightGate * uAmplitude * 0.62
     + elasticLift * uAmplitude
     + rippleLift * uAmplitude * 0.72;
+  // Every beat injects one signed spring cycle. Apply it across the complete
+  // terrain, with only a little spatial variation, so it reads as one elastic
+  // jelly surface rather than another local mound or ripple.
+  float globalJelly = clamp(uElastic.w, -0.42, 0.92);
+  float jellyShape = 0.80 + centerMound * 0.16 + broadWave * 0.04;
+  height *= max(0.82, 1.0 + globalJelly * 0.32 * jellyShape);
   height = clamp(height, 0.12, mix(6.2, 22.5, climaxDrive));
 
   vec3 transformed = position;
   transformed.y = transformed.y * height + height * 0.5 - 2.65;
-  transformed += vec3(aCell.x, 0.0, aCell.y);
+  float jellySpread = 1.0 - globalJelly * 0.032;
+  transformed += vec3(aCell.x * jellySpread, 0.0, aCell.y * jellySpread);
 
   float tideEnergyFloor = mix(0.24, 0.90, sectionDrive);
   float beatEnergyGate = tideEnergyFloor
@@ -927,6 +934,9 @@ export class SonicTopographyStage {
     const profile = selectRippleProfile(tide, this._reducedMotion);
     const beatPulse = selectTerrainBeatPulse(beat);
     this._beatPulse = Math.max(this._beatPulse, beatPulse);
+    if (beatPulse > 0) {
+      this._elasticMotion.trigger(beatPulse, tide, this._reducedMotion);
+    }
     this._beatSequence += 1;
 
     // Tide controls how many drops and how far they can spread, but no longer
