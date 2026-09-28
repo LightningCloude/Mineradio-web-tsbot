@@ -377,7 +377,7 @@ test('beat waves use the full fixed pool and travel across the expanded floor', 
   assert.match(source, /float ringLife = mix\(2\.70, 4\.35, ringDrive\)/);
   assert.match(source, /const profile = selectRippleProfile\(tide, this\._reducedMotion\)/);
   assert.match(source, /for \(let i = 0; i < profile\.count; i\+\+\)/);
-  assert.match(source, /spectralLift \* beatHeightGate \* uAmplitude \* 0\.62/);
+  assert.match(source, /spectralLift \* terrainHeightGate \* uAmplitude \* 0\.62/);
   assert.match(source, /rippleLift \* uAmplitude \* 0\.72/);
   assert.match(source, /float corePriority = mix\(1\.0, 0\.10, climaxDrive \* climaxCore\)/);
   assert.match(source, /mix\(1\.0, 0\.22, climaxDrive\) \* corePriority/);
@@ -413,7 +413,7 @@ test('terrain beat envelope is separate from the section tide and decays quickly
   assert.match(source, /float tideEnergyFloor = mix\(0\.24, 0\.90, sectionDrive\)/);
   assert.match(source, /float beatHeightGate = tideHeightFloor/);
   assert.match(source, /uBeatPulse \* \(1\.0 - tideHeightFloor\)/);
-  assert.match(source, /spectralLift \* beatHeightGate \* uAmplitude \* 0\.62/);
+  assert.match(source, /spectralLift \* terrainHeightGate \* uAmplitude \* 0\.62/);
   assert.match(source, /\+ beatLift \* uAmplitude/);
   assert.match(source, /const beatPulse = selectTerrainBeatPulse\(beat\)/);
   assert.match(source, /if \(beatPulse > 0\.045\)/);

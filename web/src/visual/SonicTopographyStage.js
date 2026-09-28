@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TerrainElasticMotion } from './TerrainElasticMotion.js';
 
 const RIPPLE_MAX = 10;
 const FLOATING_BLOCK_MAX = 32;
@@ -20,6 +21,7 @@ uniform float uAmplitude;
 uniform float uClimax;
 uniform float uBeatPulse;
 uniform float uBeatLight;
+uniform vec3 uElastic;
 uniform float uBands[8];
 uniform vec4 uRipples[10];
 varying float vEnergy;
@@ -104,7 +106,10 @@ void main() {
     broadWave * 3.2 + terrainNoise * 4.6,
     crossingWave * 2.8 + detailNoise * 3.2
   );
-  float moundDistance = length(aCell + moundOffset);
+  // Fast compression followed by the slower body gives the hills a small
+  // elastic squeeze/rebound, not a rigid translation of the scene or lyrics.
+  float elasticStrain = clamp(uElastic.x - uElastic.y, -0.35, 0.35);
+  float moundDistance = length(aCell * (1.0 + elasticStrain * 0.16) + moundOffset);
   float organicRadius = moundDistance + terrainNoise * 6.4 + detailNoise * 2.2;
   float centerMound = 1.0 - smoothstep(7.0, 38.0, organicRadius);
   float bassMound = 1.0 - smoothstep(13.0, 54.0,
@@ -205,6 +210,19 @@ void main() {
   float tideHeightFloor = mix(0.12, 0.0, sectionDrive);
   float beatHeightGate = tideHeightFloor
     + uBeatPulse * (1.0 - tideHeightFloor);
+  // Continuous kick/band envelopes keep the surface moving between discrete
+  // beat events. Delayed modes and spatial phase offsets make whole regions
+  // roll like jelly while section energy still sets the existing height cap.
+  float riverFlow = sin(aCell.x * 0.12 + aCell.y * 0.10
+    + terrainNoise * 1.6 - uTime * 2.0);
+  float elasticGate = clamp(uElastic.x * 0.70 + uElastic.y * 0.30
+    + elasticStrain * mediumWave * 0.45, 0.0, 1.0);
+  float terrainHeightGate = max(beatHeightGate, elasticGate);
+  float elasticLift = max(0.0,
+    uElastic.y * (0.55 + riverFlow * 0.45)
+    + uElastic.z * (0.30 + mediumWave * 0.28)
+    + elasticStrain * broadWave * 0.80)
+    * coverage * mix(1.4, 3.4, sectionDrive);
 
   float rippleLift = 0.0;
   float rippleGlow = 0.0;
@@ -260,7 +278,8 @@ void main() {
   float height = 0.22 + (idle + terrainNoise * 0.18) * 0.18
     + lowTideLift
     + beatLift * uAmplitude
-    + spectralLift * beatHeightGate * uAmplitude * 0.62
+    + spectralLift * terrainHeightGate * uAmplitude * 0.62
+    + elasticLift * uAmplitude
     + rippleLift * uAmplitude * 0.72;
   height = clamp(height, 0.12, mix(6.2, 22.5, climaxDrive));
 
@@ -648,6 +667,7 @@ export class SonicTopographyStage {
     this.gridSize = selectTerrainGridSize(detectCapabilities(renderer));
     this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
     this._bands = new Array(8).fill(0);
+    this._elasticMotion = new TerrainElasticMotion();
     this._ripples = Array.from({ length: RIPPLE_MAX }, () => new THREE.Vector4(0, 0, -10, 0));
     this._drops = Array.from({ length: FALLING_DROP_MAX }, () => ({
       active: false, age: 0, x: 0, z: 0, startY: 0, impactY: 0,
@@ -703,6 +723,7 @@ export class SonicTopographyStage {
       uClimax: { value: 0 },
       uBeatPulse: { value: 0 },
       uBeatLight: { value: 0 },
+      uElastic: { value: this._elasticMotion.values },
       uBands: { value: this._bands },
       uRipples: { value: this._ripples },
       uBaseColor: { value: new THREE.Color('#03060c') },
@@ -821,6 +842,7 @@ export class SonicTopographyStage {
       this._nextDropAt = this._uniforms.uTime.value + 0.45;
     }
     if (!this.root.visible) {
+      this._elasticMotion.reset();
       for (const drop of this._drops) drop.active = false;
       this._previousSyntheticKick = 0;
       this._beatPulse = 0;
@@ -957,6 +979,7 @@ export class SonicTopographyStage {
 
   update(dt, elapsed, frame) {
     if (!this.root.visible) return;
+    this._elasticMotion.update(frame, dt, this._reducedMotion);
     // This deliberately user-enabled preset keeps its slow, slider-controlled
     // yaw even when the OS requests reduced motion. The slider's 0 value is
     // the explicit off switch; other reduced-motion effects remain unchanged.
