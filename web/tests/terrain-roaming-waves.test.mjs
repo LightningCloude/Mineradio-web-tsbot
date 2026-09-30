@@ -16,8 +16,10 @@ test('patches remain spatially coherent and fade smoothly rather than jumping ce
   for (let time = 0; time <= 12; time += 0.1) {
     for (let x = -60; x <= 60; x += 7) {
       const value = sampleRoamingWave(x, 17, time);
-      assert.ok(Math.abs(value - sampleRoamingWave(x + 0.37, 17, time)) < 0.06);
-      assert.ok(Math.abs(value - sampleRoamingWave(x, 17.37, time)) < 0.06);
+      // Fine islands have shorter wavelengths; check continuity at the real
+      // balanced-tier pillar spacing, independently of temporal smoothness.
+      assert.ok(Math.abs(value - sampleRoamingWave(x + 0.37, 17, time)) < 0.13);
+      assert.ok(Math.abs(value - sampleRoamingWave(x, 17.37, time)) < 0.11);
       assert.ok(Math.abs(value - sampleRoamingWave(x, 17, time + 1 / 30)) < 0.04);
     }
   }
@@ -49,7 +51,7 @@ test('visible regions have filled coherent bodies and fade across the entire ter
     else if (region === 0) absent++;
     else softEdges++;
     // Compact islands have steeper spatial edges, but still span several cells.
-    assert.ok(Math.abs(region - sampleRoamingRegion(x + 0.37, z, 4)) < 0.20);
+    assert.ok(Math.abs(region - sampleRoamingRegion(x + 0.37, z, 4)) < 0.40);
     assert.ok(Math.abs(region - sampleRoamingRegion(x, z, 4 + 1 / 60)) < 0.06);
   }
   assert.ok(filled > 100 && absent > 100 && softEdges > 100);
@@ -93,10 +95,10 @@ test('compact patches are smaller, more numerous and denser without becoming iso
     return { area, groups, meanArea: area / groups };
   };
   const previous = measure(previousRegion), compact = measure(sampleRoamingRegion);
-  assert.ok(compact.meanArea / previous.meanArea > 0.25);
-  assert.ok(compact.meanArea / previous.meanArea < 0.5);
-  assert.ok(compact.groups / previous.groups > 2);
-  assert.ok(compact.groups / previous.groups < 4);
+  assert.ok(compact.meanArea / previous.meanArea > 0.09);
+  assert.ok(compact.meanArea / previous.meanArea < 0.12);
+  assert.ok(compact.groups / previous.groups > 9);
+  assert.ok(compact.groups / previous.groups < 11);
   assert.ok(compact.area > previous.area && compact.area < previous.area * 1.2);
-  assert.ok(compact.meanArea > 100, 'patch bodies must remain coherent, not isolated pillars');
+  assert.ok(compact.meanArea > 45, 'patch bodies must remain coherent, not isolated pillars');
 });

@@ -3,7 +3,7 @@
 export const TERRAIN_ROAMING_WAVE_GLSL = /* glsl */`
 float roamingWaveMask(vec2 cell, float time) {
   // Smaller, more numerous islands without speeding up their fade or travel.
-  cell *= 1.8;
+  cell *= 3.8;
   float crestA = smoothstep(0.15, 0.92,
     sin(cell.x * 0.085 + cell.y * 0.035 - time * 0.82) * 0.5 + 0.5);
   float crestB = smoothstep(0.10, 0.88,
@@ -27,8 +27,8 @@ function smoothstep(low, high, value) {
 /** CPU reference for regression checks against the actual GPU wave field. */
 export function sampleRoamingWave(x, z, time) {
   if (![x, z, time].every(Number.isFinite)) return 0;
-  x *= 1.8;
-  z *= 1.8;
+  x *= 3.8;
+  z *= 3.8;
   const crestA = smoothstep(0.15, 0.92,
     Math.sin(x * 0.085 + z * 0.035 - time * 0.82) * 0.5 + 0.5);
   const crestB = smoothstep(0.10, 0.88,
