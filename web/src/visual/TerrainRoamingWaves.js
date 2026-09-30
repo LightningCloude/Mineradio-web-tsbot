@@ -2,6 +2,8 @@
 // Absolute time keeps their motion deterministic and independent of frame rate.
 export const TERRAIN_ROAMING_WAVE_GLSL = /* glsl */`
 float roamingWaveMask(vec2 cell, float time) {
+  // Smaller, more numerous islands without speeding up their fade or travel.
+  cell *= 1.8;
   float crestA = smoothstep(0.15, 0.92,
     sin(cell.x * 0.085 + cell.y * 0.035 - time * 0.82) * 0.5 + 0.5);
   float crestB = smoothstep(0.10, 0.88,
@@ -13,7 +15,7 @@ float roamingWaveMask(vec2 cell, float time) {
 float roamingRegionMask(float wave) {
   // A broad filled body with soft edges reads as a region rather than only a
   // small additive hill. No fixed cells or discontinuous threshold switches.
-  return smoothstep(0.12, 0.56, wave);
+  return smoothstep(0.10, 0.52, wave);
 }
 `;
 
@@ -25,6 +27,8 @@ function smoothstep(low, high, value) {
 /** CPU reference for regression checks against the actual GPU wave field. */
 export function sampleRoamingWave(x, z, time) {
   if (![x, z, time].every(Number.isFinite)) return 0;
+  x *= 1.8;
+  z *= 1.8;
   const crestA = smoothstep(0.15, 0.92,
     Math.sin(x * 0.085 + z * 0.035 - time * 0.82) * 0.5 + 0.5);
   const crestB = smoothstep(0.10, 0.88,
@@ -34,5 +38,5 @@ export function sampleRoamingWave(x, z, time) {
 }
 
 export function sampleRoamingRegion(x, z, time) {
-  return smoothstep(0.12, 0.56, sampleRoamingWave(x, z, time));
+  return smoothstep(0.10, 0.52, sampleRoamingWave(x, z, time));
 }

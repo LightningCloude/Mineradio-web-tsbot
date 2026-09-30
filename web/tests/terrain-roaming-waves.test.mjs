@@ -48,8 +48,55 @@ test('visible regions have filled coherent bodies and fade across the entire ter
     if (region > 0.8) filled++;
     else if (region === 0) absent++;
     else softEdges++;
-    assert.ok(Math.abs(region - sampleRoamingRegion(x + 0.37, z, 4)) < 0.12);
+    // Compact islands have steeper spatial edges, but still span several cells.
+    assert.ok(Math.abs(region - sampleRoamingRegion(x + 0.37, z, 4)) < 0.20);
     assert.ok(Math.abs(region - sampleRoamingRegion(x, z, 4 + 1 / 60)) < 0.06);
   }
   assert.ok(filled > 100 && absent > 100 && softEdges > 100);
+});
+
+test('compact patches are smaller, more numerous and denser without becoming isolated dots', () => {
+  const smooth = (low, high, value) => {
+    const t = Math.max(0, Math.min(1, (value - low) / (high - low)));
+    return t * t * (3 - 2 * t);
+  };
+  // Previous large-patch field, kept as a fixed comparison fixture.
+  const previousRegion = (x, z, time) => smooth(0.12, 0.56,
+    smooth(0.15, 0.92, Math.sin(x * 0.085 + z * 0.035 - time * 0.82) * 0.5 + 0.5)
+    * smooth(0.10, 0.88, Math.sin(z * 0.078 - x * 0.026 + time * 0.61) * 0.5 + 0.5)
+    * (0.25 + (Math.sin(x * 0.032 - z * 0.060 + time * 0.39) * 0.5 + 0.5) * 0.75));
+  const measure = field => {
+    const width = 129;
+    let area = 0, groups = 0;
+    for (const time of [0, 2, 4, 6, 8, 10]) {
+      const cells = new Set();
+      for (let row = 0; row < width; row++) for (let col = 0; col < width; col++) {
+        const x = col - 64, z = row - 64;
+        if (Math.hypot(x, z) <= 64 && field(x, z, time) > 0.8) cells.add(row * width + col);
+      }
+      while (cells.size) {
+        const first = cells.values().next().value, stack = [first];
+        cells.delete(first);
+        let size = 0;
+        while (stack.length) {
+          const cell = stack.pop();
+          size++;
+          for (const next of [cell - 1, cell + 1, cell - width, cell + width]) {
+            if (Math.abs(next - cell) === 1
+              && Math.floor(next / width) !== Math.floor(cell / width)) continue;
+            if (cells.delete(next)) stack.push(next);
+          }
+        }
+        if (size > 10) { area += size; groups++; }
+      }
+    }
+    return { area, groups, meanArea: area / groups };
+  };
+  const previous = measure(previousRegion), compact = measure(sampleRoamingRegion);
+  assert.ok(compact.meanArea / previous.meanArea > 0.25);
+  assert.ok(compact.meanArea / previous.meanArea < 0.5);
+  assert.ok(compact.groups / previous.groups > 2);
+  assert.ok(compact.groups / previous.groups < 4);
+  assert.ok(compact.area > previous.area && compact.area < previous.area * 1.2);
+  assert.ok(compact.meanArea > 100, 'patch bodies must remain coherent, not isolated pillars');
 });
