@@ -3,8 +3,8 @@ const FREQUENCIES = [14, 10, 8];
 const DAMPING = [0.58, 0.64, 0.70];
 const JELLY_FREQUENCIES = [25, 29, 23];
 const JELLY_DAMPING = [0.30, 0.32, 0.29];
-const JELLY_LIMITS = [0.65, 0.42, 0.60];
-const JELLY_VELOCITY_LIMITS = [28, 22, 26];
+const JELLY_LIMITS = [1.55, 1.05, 1.45];
+const JELLY_VELOCITY_LIMITS = [70, 55, 65];
 
 function unit(value) {
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
@@ -45,9 +45,11 @@ export class TerrainElasticMotion {
     // smoothly on the next frame. Deterministic directions and different axis
     // frequencies make a small 3D wobble rather than a repeated vertical hop.
     const impulse = power * motionScale;
-    this._jellyVelocities[0] += Math.cos(angle) * impulse * 18;
-    this._jellyVelocities[1] += impulse * 11.5;
-    this._jellyVelocities[2] += Math.sin(angle) * impulse * 16;
+    // 2.5x the former impulse makes the rebound legible from the wide camera,
+    // while retaining the same short duration and frame-independent damping.
+    this._jellyVelocities[0] += Math.cos(angle) * impulse * 45;
+    this._jellyVelocities[1] += impulse * 28.75;
+    this._jellyVelocities[2] += Math.sin(angle) * impulse * 40;
     for (let i = 0; i < 3; i++) {
       const limit = JELLY_VELOCITY_LIMITS[i];
       this._jellyVelocities[i] = Math.max(-limit, Math.min(limit, this._jellyVelocities[i]));

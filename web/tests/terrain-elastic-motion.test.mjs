@@ -4,7 +4,7 @@ import { TerrainElasticMotion } from '../src/visual/TerrainElasticMotion.js';
 import { SonicTopographyStage } from '../src/visual/SonicTopographyStage.js';
 import { BeatScheduler } from '../src/core/BeatScheduler.js';
 import { BeatEngine } from '../src/core/BeatEngine.js';
-import { Group, Object3D, PerspectiveCamera } from 'three';
+import { Group, Object3D, PerspectiveCamera, Vector3 } from 'three';
 
 const loud = Object.freeze({ active: true, source: 'realtime', energy: 1,
   subBass: 1, bass: 1, lowMid: 1, mid: 1, highMid: 1, kickEnvelope: 1 });
@@ -39,14 +39,14 @@ test('each beat causes a small 3D displacement and damped recoil without a posit
     const values = firstCycle.map(v => v[axis]);
     assert.ok(Math.max(...values) > 0.02 && Math.min(...values) < -0.02);
   }
-  assert.ok(Math.max(...firstCycle.map(v => Math.hypot(...v))) > 0.2);
+  assert.ok(Math.max(...firstCycle.map(v => Math.hypot(...v))) > 0.55);
   motion.trigger(0.35, 0.1);
   const secondCycle = [];
   for (let n = 0; n < 55; n++) {
     motion.update(null, 1 / 60);
     secondCycle.push([...motion.offset]);
   }
-  assert.ok(Math.max(...secondCycle.map(v => Math.hypot(...v))) > 0.2);
+  assert.ok(Math.max(...secondCycle.map(v => Math.hypot(...v))) > 0.55);
   assert.ok(Math.hypot(...secondCycle.at(-1)) < 0.005);
 });
 
@@ -59,13 +59,33 @@ test('rapid strong beats stack safely while reduced motion remains restrained', 
     for (let frame = 0; frame < 5; frame++) {
       normal.update(loud, 1 / 60);
       reduced.update(loud, 1 / 60, true);
+      assert.ok(Math.abs(normal.offset[0]) <= 1.551 && Math.abs(normal.offset[1]) <= 1.051
+        && Math.abs(normal.offset[2]) <= 1.451);
+      assert.ok(Math.hypot(...normal.offset) < 2.37);
     }
   }
   assert.ok([...normal.values].every(Number.isFinite));
-  assert.ok(Math.abs(normal.offset[0]) <= 0.65 && Math.abs(normal.offset[1]) <= 0.42
-    && Math.abs(normal.offset[2]) <= 0.60);
-  assert.ok(Math.hypot(...normal.offset) < 1);
   assert.ok(Math.hypot(...reduced.offset) < Math.hypot(...normal.offset));
+});
+
+test('an ordinary beat visibly moves the distant terrain without shaking its camera', () => {
+  const motion = new TerrainElasticMotion();
+  const camera = new PerspectiveCamera(48, 1440 / 900, 0.1, 500);
+  camera.position.set(0, 54, 112);
+  camera.lookAt(0, -8, -18);
+  camera.updateMatrixWorld(true);
+  const origin = new Vector3(0, -6.2, -18);
+  const rest = origin.clone().project(camera);
+  motion.trigger(0.65, 0.8);
+  let peakPixels = 0;
+  for (let frame = 0; frame < 60; frame++) {
+    motion.update(null, 1 / 60);
+    const displaced = origin.clone().add(new Vector3(...motion.offset)).project(camera);
+    peakPixels = Math.max(peakPixels, Math.hypot(
+      (displaced.x - rest.x) * 720, (displaced.y - rest.y) * 450));
+  }
+  assert.ok(peakPixels > 5 && peakPixels < 12, `excursion: ${peakPixels}px`);
+  assert.deepEqual(camera.position.toArray(), [0, 54, 112]);
 });
 
 test('the real scheduler delivers each analyzed beat once to the terrain spring', () => {
@@ -100,7 +120,7 @@ test('the real scheduler delivers each analyzed beat once to the terrain spring'
     }
   }
   assert.deepEqual(received, [0, 1, 2, 3, 4, 5, 6, 7]);
-  assert.ok(peaks.every(peak => peak > 0.25));
+  assert.ok(peaks.every(peak => peak > 0.65));
   scheduler.tick(10, false);
   assert.equal(received.length, 8);
 });

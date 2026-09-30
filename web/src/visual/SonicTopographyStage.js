@@ -329,7 +329,7 @@ void main() {
   vec3 highColor = mix(uWarmColor, uAccentColor, smoothstep(0.52, 1.0, energy));
   vec3 color = mix(lowColor, highColor, smoothstep(0.12, 0.92, energy));
   float peakBlend = pow(clamp(vPeakIntensity, 0.0, 1.0), 0.85);
-  color = mix(color, uPeakColor, peakBlend * mix(0.34, 0.62, 1.0 - vSide));
+  color = mix(color, uPeakColor, peakBlend * mix(0.26, 0.46, 1.0 - vSide));
   // Source-style vertical peak glow keeps aligned side faces luminous instead
   // of allowing a dark perspective seam through the centre of the mountain.
   float sideLight = mix(0.66, 0.92, peakBlend);
@@ -337,12 +337,12 @@ void main() {
   float edgeSpark = smoothstep(0.74, 1.0, energy) * (0.84 + vSeed * 0.16);
   color *= (0.40 + energy * 0.60 + edgeSpark * 0.14 + peakBlend * 0.18)
     * topLight * uBrightness;
-  // A narrow palette-coloured crest and a shorter white high-frequency wake
+  // A narrow palette-coloured crest and a lighter same-hue high-frequency wake
   // remain legible even where a broad peak has priority over ripple height.
   color = mix(color, uAccentColor * 1.12,
     clamp(vRippleGlow * 0.68, 0.0, 0.68));
-  color = mix(color, vec3(0.92, 0.97, 1.0),
-    clamp(vRippleWhite * 0.56, 0.0, 0.56));
+  color = mix(color, uPeakColor,
+    clamp(vRippleWhite * 0.42, 0.0, 0.42));
   // Soft highlight compression preserves the source's hot peak without
   // turning a broad chorus mound into a flat white patch on SDR displays.
   color = color / (vec3(1.0) + color * 0.28);
@@ -405,8 +405,12 @@ function clamp01(value) {
  * Returns normalized RGB or null when the cover has no usable colour.
  */
 export function selectThemeColor(pixels) {
-  let red = 0, green = 0, blue = 0, weight = 0;
   if (!pixels || typeof pixels.length !== 'number') return null;
+  // Average within the dominant hue family, not across the whole cover:
+  // complementary cover colours otherwise cancel into grey/brown terrain.
+  const buckets = Array.from({ length: 24 }, () => ({ red: 0, green: 0, blue: 0, weight: 0 }));
+  const colour = new THREE.Color();
+  const hsl = {};
 
   for (let i = 0; i + 3 < pixels.length; i += 4) {
     if (pixels[i + 3] < 96) continue;
@@ -418,19 +422,52 @@ export function selectThemeColor(pixels) {
     const saturation = maximum > 0.001 ? (maximum - minimum) / maximum : 0;
     const nearWhite = minimum >= 0.90
       || (maximum >= 0.84 && saturation < 0.10);
-    if (nearWhite) continue;
+    if (nearWhite || saturation < 0.12 || maximum < 0.06) continue;
 
     // Prefer meaningful chroma without allowing very dark pixels to dominate.
     const currentWeight = (0.22 + maximum * 0.48)
       * (0.35 + saturation * 1.15);
-    red += r * currentWeight;
-    green += g * currentWeight;
-    blue += b * currentWeight;
-    weight += currentWeight;
+    colour.setRGB(r, g, b).getHSL(hsl);
+    const bucket = buckets[Math.min(23, Math.floor(hsl.h * 24))];
+    bucket.red += r * currentWeight;
+    bucket.green += g * currentWeight;
+    bucket.blue += b * currentWeight;
+    bucket.weight += currentWeight;
   }
 
+  let dominant = 0;
+  for (let i = 1; i < buckets.length; i++) {
+    if (buckets[i].weight > buckets[dominant].weight) dominant = i;
+  }
+  let red = 0, green = 0, blue = 0, weight = 0;
+  for (const offset of [-1, 0, 1]) {
+    const bucket = buckets[(dominant + offset + buckets.length) % buckets.length];
+    red += bucket.red;
+    green += bucket.green;
+    blue += bucket.blue;
+    weight += bucket.weight;
+  }
   if (weight <= 0.001) return null;
   return Object.freeze({ red: red / weight, green: green / weight, blue: blue / weight });
+}
+
+/** One chromatic family from shadow to highlight, never orange/blue cross-mixing. */
+export function createTerrainPalette(theme = null) {
+  const themeColor = theme
+    ? new THREE.Color(clamp01(theme.red), clamp01(theme.green), clamp01(theme.blue))
+    : new THREE.Color('#1d91d3');
+  const hsl = {};
+  themeColor.getHSL(hsl);
+  // Neutral covers use the stable blue default rather than arbitrary grey/red.
+  const hue = hsl.s >= 0.12 ? hsl.h : 0.56;
+  return {
+    base: new THREE.Color().setHSL(hue, 0.65, 0.025),
+    cool: new THREE.Color().setHSL(hue, 0.78, 0.25),
+    body: new THREE.Color().setHSL(hue, 0.82, 0.44),
+    accent: new THREE.Color().setHSL(hue, 0.90, 0.59),
+    peak: new THREE.Color().setHSL(hue, 0.64, 0.73),
+    drop: new THREE.Color().setHSL(hue, 0.56, 0.77),
+  };
 }
 
 const SYNTHETIC_BAND_FLOORS = [0.015, 0.012, 0.008, 0.004, 0.006, 0.006, 0.005, 0.004];
@@ -717,6 +754,7 @@ export class SonicTopographyStage {
     geometry.setAttribute('aCell', new THREE.InstancedBufferAttribute(cells, 2));
     geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
 
+    const palette = createTerrainPalette();
     this._uniforms = {
       uTime: { value: 0 },
       uAmplitude: { value: this._amplitude },
@@ -726,11 +764,11 @@ export class SonicTopographyStage {
       uElastic: { value: this._elasticMotion.values },
       uBands: { value: this._bands },
       uRipples: { value: this._ripples },
-      uBaseColor: { value: new THREE.Color('#03060c') },
-      uCoolColor: { value: new THREE.Color('#1c5f91') },
-      uWarmColor: { value: new THREE.Color('#c45345') },
-      uAccentColor: { value: new THREE.Color('#8dd8db') },
-      uPeakColor: { value: new THREE.Color('#efffff') },
+      uBaseColor: { value: palette.base },
+      uCoolColor: { value: palette.cool },
+      uWarmColor: { value: palette.body },
+      uAccentColor: { value: palette.accent },
+      uPeakColor: { value: palette.peak },
       uBrightness: { value: this._brightness },
       uLightCeiling: { value: TERRAIN_LIGHT_CEILING },
       uOpacity: { value: 1 },
@@ -785,7 +823,7 @@ export class SonicTopographyStage {
   _buildFloatingBlocks() {
     const geometry = new THREE.BoxGeometry(0.16, 0.16, 0.16);
     const material = new THREE.MeshBasicMaterial({
-      color: 0x9edce2,
+      color: this._uniforms.uAccentColor.value.clone(),
       transparent: true,
       opacity: this._reducedMotion ? 0 : 0.54,
       depthWrite: false,
@@ -813,7 +851,7 @@ export class SonicTopographyStage {
     vertices.needsUpdate = true;
     geometry.computeVertexNormals();
     const material = new THREE.MeshBasicMaterial({
-      color: 0xeafcff,
+      color: this._uniforms.uPeakColor.value.clone(),
       transparent: true,
       opacity: 0.82,
       depthWrite: false,
@@ -878,13 +916,19 @@ export class SonicTopographyStage {
   }
 
   resetPalette() {
-    this._uniforms.uBaseColor.value.set('#03060c');
-    this._uniforms.uCoolColor.value.set('#1c5f91');
-    this._uniforms.uWarmColor.value.set('#c45345');
-    this._uniforms.uAccentColor.value.set('#8dd8db');
-    this._uniforms.uPeakColor.value.set('#efffff');
-    this.dropMesh.material.color.set('#eafcff');
-    this.dropTrailMesh.material.color.set('#eafcff');
+    this._applyPalette(createTerrainPalette());
+  }
+
+  _applyPalette(palette) {
+    // Copy into existing objects: boundary mist shares these live uniforms.
+    this._uniforms.uBaseColor.value.copy(palette.base);
+    this._uniforms.uCoolColor.value.copy(palette.cool);
+    this._uniforms.uWarmColor.value.copy(palette.body);
+    this._uniforms.uAccentColor.value.copy(palette.accent);
+    this._uniforms.uPeakColor.value.copy(palette.peak);
+    this.floatingBlocks.material.color.copy(palette.accent);
+    this.dropMesh.material.color.copy(palette.drop);
+    this.dropTrailMesh.material.color.copy(palette.drop);
   }
 
   setPaletteFromCanvas(canvas) {
@@ -901,15 +945,7 @@ export class SonicTopographyStage {
         this.resetPalette();
         return;
       }
-      const accent = new THREE.Color(theme.red, theme.green, theme.blue);
-      const hsl = {};
-      accent.getHSL(hsl);
-      this._uniforms.uAccentColor.value.copy(accent);
-      this._uniforms.uCoolColor.value.setHSL((hsl.h + 0.93) % 1, Math.max(0.38, hsl.s), 0.34);
-      this._uniforms.uWarmColor.value.setHSL((hsl.h + 0.08) % 1, Math.max(0.42, hsl.s), 0.44);
-      this._uniforms.uPeakColor.value.copy(accent).lerp(new THREE.Color('#ffffff'), 0.60);
-      this.dropMesh.material.color.copy(accent).lerp(new THREE.Color('#ffffff'), 0.72);
-      this.dropTrailMesh.material.color.copy(this.dropMesh.material.color);
+      this._applyPalette(createTerrainPalette(theme));
     } catch (_) {
       // Keep the stable default palette when canvas sampling is unavailable.
     }

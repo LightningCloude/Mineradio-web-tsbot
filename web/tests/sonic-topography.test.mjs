@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { Color } from 'three';
 
 import {
   selectRippleProfile,
@@ -17,6 +18,7 @@ import {
   selectTerrainGridSize,
   createColumnGeometry,
   selectThemeColor,
+  createTerrainPalette,
   shapeSonicBand,
   advanceTerrainAutoRotation,
 } from '../src/visual/SonicTopographyStage.js';
@@ -280,6 +282,53 @@ test('production terrain uses a dense grid with slim column footprints', async (
   assert.match(source, /createColumnGeometry\(spacing \* 0\.78\)/);
 });
 
+test('cover sampling keeps the dominant chromatic family instead of muddy RGB averaging', () => {
+  const theme = selectThemeColor(new Uint8ClampedArray([
+    20, 100, 220, 255, 24, 108, 230, 255, 18, 92, 212, 255,
+    225, 95, 20, 255, 250, 250, 250, 255, 95, 95, 95, 255,
+  ]));
+  assert.ok(theme.blue > 0.8 && theme.red < 0.1);
+  // Red hue spans the wrap-around between the last and first buckets.
+  const red = selectThemeColor(new Uint8ClampedArray([
+    225, 20, 25, 255, 225, 25, 20, 255,
+  ]));
+  assert.ok(red.red > 0.85 && red.green < 0.1 && red.blue < 0.1);
+  for (const pixels of [null, [], [0, 0, 0, 255], [120, 120, 120, 255],
+    [0, 120, 220, 0]]) assert.equal(selectThemeColor(pixels), null);
+});
+
+test('terrain, fog and highlights use a saturated single-hue luminance ramp', () => {
+  for (const theme of [null, { red: 0.9, green: 0.1, blue: 0.2 },
+    { red: 0.1, green: 0.8, blue: 0.3 }, { red: 0.6, green: 0.1, blue: 0.8 },
+    { red: 0.5, green: 0.5, blue: 0.5 }]) {
+    const palette = createTerrainPalette(theme);
+    const hsl = Object.values(palette).map(color => color.getHSL({}));
+    assert.ok(hsl.every(value => Math.abs(value.h - hsl[0].h) < 1e-9));
+    assert.ok(hsl.every(value => value.s >= 0.55));
+    for (let i = 1; i < hsl.length; i++) assert.ok(hsl[i].l > hsl[i - 1].l);
+    assert.ok(Math.min(palette.peak.r, palette.peak.g, palette.peak.b) < 0.60);
+    assert.ok(palette.accent.clone().lerp(palette.peak, 0.5).getHSL({}).s > 0.6);
+  }
+});
+
+test('palette changes preserve shared fog uniforms and recolour drops and floating blocks', () => {
+  const uniforms = Object.fromEntries(['uBaseColor', 'uCoolColor', 'uWarmColor',
+    'uAccentColor', 'uPeakColor'].map(key => [key, { value: new Color() }]));
+  const colourMesh = () => ({ material: { color: new Color() } });
+  const stage = { _uniforms: uniforms, floatingBlocks: colourMesh(),
+    dropMesh: colourMesh(), dropTrailMesh: colourMesh() };
+  const fogColour = uniforms.uCoolColor.value;
+  const accent = uniforms.uAccentColor.value;
+  const palette = createTerrainPalette({ red: 0.7, green: 0.1, blue: 0.8 });
+  SonicTopographyStage.prototype._applyPalette.call(stage, palette);
+  assert.equal(uniforms.uCoolColor.value, fogColour);
+  assert.equal(uniforms.uAccentColor.value, accent);
+  assert.ok(fogColour.equals(palette.cool));
+  assert.ok(stage.floatingBlocks.material.color.equals(palette.accent));
+  assert.ok(stage.dropMesh.material.color.equals(palette.drop));
+  assert.ok(stage.dropTrailMesh.material.color.equals(palette.drop));
+});
+
 test('particle stage exposes three presets and lazily creates terrain', async () => {
   const source = await readFile(new URL('../src/visual/ParticleStage.js', import.meta.url), 'utf8');
   assert.match(source, /Math\.min\(2, index \| 0\)/);
@@ -362,7 +411,7 @@ test('terrain footprint hides its boundary and audio fields span broad overlappi
   assert.match(source, /mix\(6\.2, 22\.5, climaxDrive\)/);
   assert.match(source, /uClimax: \{ value: 0 \}/);
   assert.match(source, /uClimax\.value = clamp01\(frame\?\.sectionEnergy\)/);
-  assert.match(source, /uPeakColor: \{ value: new THREE\.Color\('#efffff'\) \}/);
+  assert.match(source, /uPeakColor: \{ value: palette\.peak \}/);
   assert.match(source, /vPeakIntensity = clamp/);
   assert.match(source, /float brillianceField = uBands\[6\] \* microSpikes/);
   assert.match(source, /uBands\[0\] \* centerMound \* 0\.78/);
@@ -399,7 +448,7 @@ test('beat rings use a water-drop crest, trough and distance-damped wake', async
   assert.match(source, /rippleGlow = max\(rippleGlow, visibleWake \* \(1\.0 - accent\)\)/);
   assert.match(source, /rippleWhite = max\(rippleWhite, visibleWake \* accent\)/);
   assert.match(source, /color = mix\(color, uAccentColor \* 1\.12/);
-  assert.match(source, /color = mix\(color, vec3\(0\.92, 0\.97, 1\.0\)/);
+  assert.match(source, /color = mix\(color, uPeakColor,\s*clamp\(vRippleWhite \* 0\.42/);
   assert.match(source, /this\._spawnRipple\(angle, radius, 0, 0\.54\)/);
   assert.match(source, /color \*= uLightCeiling/);
 });
@@ -432,9 +481,9 @@ test('terrain columns omit only the hidden bottom face and peak light stays cont
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   assert.match(source, /opposite x-facing side/);
   assert.match(source, /opposite z-facing side/);
-  assert.match(source, /peakBlend \* mix\(0\.34, 0\.62, 1\.0 - vSide\)/);
+  assert.match(source, /peakBlend \* mix\(0\.26, 0\.46, 1\.0 - vSide\)/);
   assert.match(source, /float sideLight = mix\(0\.66, 0\.92, peakBlend\)/);
-  assert.match(source, /lerp\(new THREE\.Color\('#ffffff'\), 0\.60\)/);
+  assert.doesNotMatch(source, /lerp\(new THREE\.Color\('#ffffff'\)/);
   assert.match(source, /color = color \/ \(vec3\(1\.0\) \+ color \* 0\.28\)/);
   assert.match(source, /this\.root\.rotation\.y = -0\.35/);
 });
