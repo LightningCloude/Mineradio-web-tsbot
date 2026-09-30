@@ -488,6 +488,22 @@ test('terrain columns omit only the hidden bottom face and peak light stays cont
   assert.match(source, /this\.root\.rotation\.y = -0\.35/);
 });
 
+test('terrain colour groups follow broad fields, not random pillar seeds or ripple troughs', async () => {
+  const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
+  const field = source.match(/float colorBlock = ([\s\S]*?)float idle =/)[1];
+  assert.match(field, /terrainNoise \* 0\.35 \+ broadWave \* 0\.10 \+ mediumWave \* 0\.05/);
+  assert.match(field, /colorActivity \* \(0\.34 \+ colorBlock \* 0\.26\) \* coverage/);
+  for (let i = 0; i < 8; i++) assert.ok(field.includes(`uBands[${i}]`));
+  assert.doesNotMatch(field, /aSeed|fineClusters|microSpikes|satellitePattern/);
+  const output = source.match(/vEnergy = ([\s\S]*?)vPeakIntensity =/)[1];
+  assert.match(output, /max\(colorFloor, spectralEnergy \* beatEnergyGate\)/);
+  assert.doesNotMatch(output, /aSeed|beatPatch|microSpikes|rippleLift/);
+  assert.match(source, /sideLight = max\(sideLight, mix\(0\.66, 0\.84/);
+  // Fine/high-frequency geometry still exists; only colour distribution changes.
+  assert.match(source, /float brillianceField = uBands\[6\] \* microSpikes/);
+  assert.match(source, /float airField = uBands\[7\] \* microSpikes/);
+});
+
 test('visual FFT bands use Mineradio Sonic frequency regions without changing beat bands', async () => {
   const source = await readFile(new URL('../src/core/AudioAnalyzer.js', import.meta.url), 'utf8');
   assert.match(source, /subBass:\s+\[32, 58\]/);
