@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { Color } from 'three';
 
 import {
@@ -488,20 +489,22 @@ test('terrain columns omit only the hidden bottom face and peak light stays cont
   assert.match(source, /this\.root\.rotation\.y = -0\.35/);
 });
 
-test('terrain colour groups follow broad fields, not random pillar seeds or ripple troughs', async () => {
+test('roaming terrain patches affect height while the previous colour mapping is restored exactly', async () => {
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
-  const field = source.match(/float colorBlock = ([\s\S]*?)float idle =/)[1];
-  assert.match(field, /terrainNoise \* 0\.35 \+ broadWave \* 0\.10 \+ mediumWave \* 0\.05/);
-  assert.match(field, /colorActivity \* \(0\.34 \+ colorBlock \* 0\.26\) \* coverage/);
+  const field = source.match(/float roamingMask = ([\s\S]*?)float rippleLift =/)[1];
+  assert.match(field, /roamingWaveMask\(aCell, uTime \* uWaveMotionScale\)/);
+  assert.match(field, /roamingMask \* roamingActivity \* \(0\.18 \+ roamingBeat \* 0\.82\)/);
   for (let i = 0; i < 8; i++) assert.ok(field.includes(`uBands[${i}]`));
-  assert.doesNotMatch(field, /aSeed|fineClusters|microSpikes|satellitePattern/);
+  assert.doesNotMatch(field, /aSeed|centerMound|satelliteMask|floor\(/);
+  assert.match(source, /\+ roamingLift \* uAmplitude/);
+  assert.match(source, /uWaveMotionScale: \{ value: this\._reducedMotion \? 0\.45 : 1 \}/);
   const output = source.match(/vEnergy = ([\s\S]*?)vPeakIntensity =/)[1];
-  assert.match(output, /max\(colorFloor, spectralEnergy \* beatEnergyGate\)/);
-  assert.doesNotMatch(output, /aSeed|beatPatch|microSpikes|rippleLift/);
-  assert.match(source, /sideLight = max\(sideLight, mix\(0\.66, 0\.84/);
-  // Fine/high-frequency geometry still exists; only colour distribution changes.
-  assert.match(source, /float brillianceField = uBands\[6\] \* microSpikes/);
-  assert.match(source, /float airField = uBands\[7\] \* microSpikes/);
+  assert.match(output, /spectralEnergy \* beatEnergyGate \+ rippleLift \* 0\.24/);
+  assert.doesNotMatch(output, /roaming|colorFloor|colorBlock/);
+  const fragment = source.match(/const TERRAIN_FS.*?`([\s\S]*?)`;/)[1].replace(/\r\n/g, '\n');
+  assert.equal(createHash('sha256').update(fragment).digest('hex'),
+    '362af9150e3ebb1106c9ee8be22bdbea43dab60cd2736feeeed1a8bf75d66388');
+  assert.doesNotMatch(source, /colorFloor|colorBlock|sideLight = max/);
 });
 
 test('visual FFT bands use Mineradio Sonic frequency regions without changing beat bands', async () => {

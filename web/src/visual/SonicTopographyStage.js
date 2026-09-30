@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TerrainElasticMotion } from './TerrainElasticMotion.js';
+import { TERRAIN_ROAMING_WAVE_GLSL } from './TerrainRoamingWaves.js';
 
 const RIPPLE_MAX = 10;
 const FLOATING_BLOCK_MAX = 32;
@@ -22,6 +23,7 @@ uniform float uClimax;
 uniform float uBeatPulse;
 uniform float uBeatLight;
 uniform vec3 uElastic;
+uniform float uWaveMotionScale;
 uniform float uBands[8];
 uniform vec4 uRipples[10];
 varying float vEnergy;
@@ -63,6 +65,8 @@ float snoise(vec2 v) {
   g.yz = a0.yz * x12.xz + h.yz * x12.yw;
   return 130.0 * dot(m, g);
 }
+
+${TERRAIN_ROAMING_WAVE_GLSL}
 
 float easeLift(float raw, float maxHeight) {
   float x = clamp(raw, 0.0, 1.0);
@@ -168,28 +172,18 @@ void main() {
   float spectralLift = (lowBody + midBody * 0.78 + midCoreMound * 0.82
     + climaxMound + climaxSatellites
     + highBody * 0.62 + max(brillianceField, airField) * 0.52) * coverage;
-  // Colour follows continuous landmasses, independently of the seed-driven
-  // micro-spikes used for height. Adjacent columns share broad colour blocks
-  // instead of alternating between near-black and bright isolated speckles.
-  float colorBlock = smoothstep(0.24, 0.76,
-    terrainNoise * 0.35 + broadWave * 0.10 + mediumWave * 0.05 + 0.50);
-  float colorSignal = max(max(max(uBands[0], uBands[1]), max(uBands[2], uBands[3])),
-    max(max(uBands[4], uBands[5]), max(uBands[6], uBands[7])));
-  float colorActivity = smoothstep(0.0, 0.08,
-    max(colorSignal, max(uBeatLight, uElastic.y * 0.75)));
-  float colorFloor = colorActivity * (0.34 + colorBlock * 0.26) * coverage;
   float spectralEnergy = clamp(
     uBands[0] * centerMound * 0.78
     + uBands[1] * bassMound * 0.62
     + uBands[2] * rollingHills * 0.42
     + uBands[3] * midPatches * 0.38
-    + uBands[4] * directionalPatches * colorBlock * 0.34
-    + uBands[5] * colorBlock * 0.24
-    + uBands[6] * colorBlock * 0.20
-    + uBands[7] * colorBlock * 0.16
+    + uBands[4] * directionalPatches * fineClusters * 0.34
+    + uBands[5] * fineClusters * 0.40
+    + uBands[6] * microSpikes * 0.52
+    + uBands[7] * microSpikes * 0.60
     + midCoreEnvelope * centerMound * 0.48
     + climaxDrive * climaxCore * 0.92
-    + climaxDrive * colorBlock * satelliteMask * 0.34,
+    + climaxDrive * satellitePattern * satelliteMask * 0.34,
     0.0, 1.2) * coverage;
   float idle = 0.42 + broadWave * 0.17 + crossingWave * 0.06;
   // The floor never becomes perfectly flat. Several slow deterministic
@@ -233,6 +227,18 @@ void main() {
     + uElastic.z * (0.30 + mediumWave * 0.28)
     + elasticStrain * broadWave * 0.80)
     * coverage * mix(1.4, 3.4, sectionDrive);
+
+  // Broad, travelling patches fade in and out everywhere, not just inside the
+  // central mound or a fixed satellite ring. This affects height only: keep
+  // the previous palette, colour mapping and lighting completely independent.
+  float roamingMask = roamingWaveMask(aCell, uTime * uWaveMotionScale);
+  float roamingSignal = max(max(max(uBands[0], uBands[1]), max(uBands[2], uBands[3])),
+    max(max(uBands[4], uBands[5]), max(uBands[6], uBands[7])));
+  float roamingActivity = smoothstep(0.0, 0.10, max(roamingSignal, uElastic.y));
+  float roamingBeat = clamp(max(uBeatPulse, uElastic.x * 0.60 + uElastic.y * 0.40), 0.0, 1.0);
+  float roamingLift = roamingMask * roamingActivity * (0.18 + roamingBeat * 0.82)
+    * mix(0.8, 2.6, sectionDrive) * coverage
+    * mix(1.0, 0.28, climaxDrive * climaxCore);
 
   float rippleLift = 0.0;
   float rippleGlow = 0.0;
@@ -290,6 +296,7 @@ void main() {
     + beatLift * uAmplitude
     + spectralLift * terrainHeightGate * uAmplitude * 0.62
     + elasticLift * uAmplitude
+    + roamingLift * uAmplitude
     + rippleLift * uAmplitude * 0.72;
   height = clamp(height, 0.12, mix(6.2, 22.5, climaxDrive));
 
@@ -300,10 +307,9 @@ void main() {
   float tideEnergyFloor = mix(0.24, 0.90, sectionDrive);
   float beatEnergyGate = tideEnergyFloor
     + uBeatLight * (1.0 - tideEnergyFloor);
-  // Ring crests keep their dedicated colour overlays below; their troughs
-  // must not punch black holes into an otherwise coherent coloured region.
-  vEnergy = clamp(max(colorFloor, spectralEnergy * beatEnergyGate)
-    + uBeatLight * colorBlock * 0.12 * coverage, 0.0, 1.12);
+  vEnergy = clamp(spectralEnergy * beatEnergyGate + rippleLift * 0.24
+    + uBeatLight * (0.10 + beatPatch * 0.26)
+    + microSpikes * (uBands[6] + uBands[7]) * 0.16, 0.0, 1.45);
   vPeakIntensity = clamp(
     climaxDrive * climaxCore * 1.08 + centerMound * uBands[0] * 0.62,
     0.0, 1.0);
@@ -344,9 +350,6 @@ void main() {
   // Source-style vertical peak glow keeps aligned side faces luminous instead
   // of allowing a dark perspective seam through the centre of the mountain.
   float sideLight = mix(0.66, 0.92, peakBlend);
-  // Lift active side faces as a group, retaining calm idle shadows without
-  // dark pillars splitting the bright patches into a checkerboard.
-  sideLight = max(sideLight, mix(0.66, 0.84, smoothstep(0.20, 0.55, energy)));
   float topLight = mix(1.08, sideLight, vSide);
   float edgeSpark = smoothstep(0.74, 1.0, energy) * (0.84 + vSeed * 0.16);
   color *= (0.40 + energy * 0.60 + edgeSpark * 0.14 + peakBlend * 0.18)
@@ -776,6 +779,7 @@ export class SonicTopographyStage {
       uBeatPulse: { value: 0 },
       uBeatLight: { value: 0 },
       uElastic: { value: this._elasticMotion.values },
+      uWaveMotionScale: { value: this._reducedMotion ? 0.45 : 1 },
       uBands: { value: this._bands },
       uRipples: { value: this._ripples },
       uBaseColor: { value: palette.base },
