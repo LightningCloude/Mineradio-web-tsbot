@@ -228,17 +228,24 @@ void main() {
     + elasticStrain * broadWave * 0.80)
     * coverage * mix(1.4, 3.4, sectionDrive);
 
-  // Broad, travelling patches fade in and out everywhere, not just inside the
-  // central mound or a fixed satellite ring. This affects height only: keep
-  // the previous palette, colour mapping and lighting completely independent.
+  // A shared travelling region controls both height and response visibility.
+  // Keeping random detail outside its body subdued prevents small isolated
+  // pillars from masking the grouped structure. Palette and material stay as
+  // before; this is a moving response distribution, not a full-floor tint.
   float roamingMask = roamingWaveMask(aCell, uTime * uWaveMotionScale);
+  float roamingRegion = roamingRegionMask(roamingMask);
   float roamingSignal = max(max(max(uBands[0], uBands[1]), max(uBands[2], uBands[3])),
     max(max(uBands[4], uBands[5]), max(uBands[6], uBands[7])));
   float roamingActivity = smoothstep(0.0, 0.10, max(roamingSignal, uElastic.y));
   float roamingBeat = clamp(max(uBeatPulse, uElastic.x * 0.60 + uElastic.y * 0.40), 0.0, 1.0);
-  float roamingLift = roamingMask * roamingActivity * (0.18 + roamingBeat * 0.82)
-    * mix(0.8, 2.6, sectionDrive) * coverage
+  float roamingLift = roamingRegion * roamingActivity * (0.28 + roamingBeat * 0.72)
+    * mix(1.5, 4.2, sectionDrive) * coverage
     * mix(1.0, 0.28, climaxDrive * climaxCore);
+  float regionDetailGate = mix(0.12, 1.0, roamingRegion);
+  float structuralCore = (lowBody + midCoreMound * 0.82 + climaxMound) * coverage;
+  spectralLift = structuralCore + max(0.0, spectralLift - structuralCore) * regionDetailGate;
+  beatLift *= mix(regionDetailGate, 1.0, centerMound);
+  elasticLift *= mix(regionDetailGate, 1.0, centerMound);
 
   float rippleLift = 0.0;
   float rippleGlow = 0.0;
@@ -307,9 +314,14 @@ void main() {
   float tideEnergyFloor = mix(0.24, 0.90, sectionDrive);
   float beatEnergyGate = tideEnergyFloor
     + uBeatLight * (1.0 - tideEnergyFloor);
-  vEnergy = clamp(spectralEnergy * beatEnergyGate + rippleLift * 0.24
+  float legacyEnergy = clamp(spectralEnergy * beatEnergyGate + rippleLift * 0.24
     + uBeatLight * (0.10 + beatPatch * 0.26)
     + microSpikes * (uBands[6] + uBands[7]) * 0.16, 0.0, 1.45);
+  float coreVisibility = clamp(centerMound * 0.65 + climaxDrive * climaxCore, 0.0, 1.0);
+  float regionVisibility = mix(mix(0.16, 1.0, roamingRegion), 1.0, coreVisibility);
+  float regionEnergy = roamingRegion * roamingActivity * (0.26 + roamingSignal * 0.60)
+    * beatEnergyGate * coverage;
+  vEnergy = max(legacyEnergy * regionVisibility, regionEnergy);
   vPeakIntensity = clamp(
     climaxDrive * climaxCore * 1.08 + centerMound * uBands[0] * 0.62,
     0.0, 1.0);

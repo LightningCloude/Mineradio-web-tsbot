@@ -489,18 +489,22 @@ test('terrain columns omit only the hidden bottom face and peak light stays cont
   assert.match(source, /this\.root\.rotation\.y = -0\.35/);
 });
 
-test('roaming terrain patches affect height while the previous colour mapping is restored exactly', async () => {
+test('moving regions group height and response visibility while preserving the previous palette shader', async () => {
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   const field = source.match(/float roamingMask = ([\s\S]*?)float rippleLift =/)[1];
   assert.match(field, /roamingWaveMask\(aCell, uTime \* uWaveMotionScale\)/);
-  assert.match(field, /roamingMask \* roamingActivity \* \(0\.18 \+ roamingBeat \* 0\.82\)/);
+  assert.match(field, /roamingRegionMask\(roamingMask\)/);
+  assert.match(field, /roamingRegion \* roamingActivity \* \(0\.28 \+ roamingBeat \* 0\.72\)/);
   for (let i = 0; i < 8; i++) assert.ok(field.includes(`uBands[${i}]`));
-  assert.doesNotMatch(field, /aSeed|centerMound|satelliteMask|floor\(/);
+  assert.doesNotMatch(field, /aSeed|satelliteMask|floor\(/);
+  assert.match(field, /spectralLift = structuralCore \+ max/);
+  assert.match(field, /beatLift \*= mix\(regionDetailGate, 1\.0, centerMound\)/);
   assert.match(source, /\+ roamingLift \* uAmplitude/);
   assert.match(source, /uWaveMotionScale: \{ value: this\._reducedMotion \? 0\.45 : 1 \}/);
   const output = source.match(/vEnergy = ([\s\S]*?)vPeakIntensity =/)[1];
-  assert.match(output, /spectralEnergy \* beatEnergyGate \+ rippleLift \* 0\.24/);
-  assert.doesNotMatch(output, /roaming|colorFloor|colorBlock/);
+  assert.match(output, /max\(legacyEnergy \* regionVisibility, regionEnergy\)/);
+  assert.doesNotMatch(output, /colorFloor|colorBlock/);
+  assert.match(source, /regionEnergy = roamingRegion \* roamingActivity/);
   const fragment = source.match(/const TERRAIN_FS.*?`([\s\S]*?)`;/)[1].replace(/\r\n/g, '\n');
   assert.equal(createHash('sha256').update(fragment).digest('hex'),
     '362af9150e3ebb1106c9ee8be22bdbea43dab60cd2736feeeed1a8bf75d66388');

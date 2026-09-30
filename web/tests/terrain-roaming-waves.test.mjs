@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sampleRoamingWave } from '../src/visual/TerrainRoamingWaves.js';
+import { sampleRoamingWave, sampleRoamingRegion } from '../src/visual/TerrainRoamingWaves.js';
 
 test('travelling patches emerge and disappear throughout the terrain, not only at the centre', () => {
   for (const [x, z] of [[0, 0], [60, 0], [-60, 0], [0, 60], [0, -60],
@@ -33,4 +33,23 @@ test('absolute-time waves remain deterministic across frame rates and slower red
     assert.equal(sampleRoamingWave(0, invalid, 0), 0);
     assert.equal(sampleRoamingWave(0, 0, invalid), 0);
   }
+});
+
+test('visible regions have filled coherent bodies and fade across the entire terrain', () => {
+  for (const [x, z] of [[0, 0], [60, 0], [-60, 0], [0, 60], [0, -60],
+    [42, 42], [-42, 42], [42, -42], [-42, -42]]) {
+    const samples = Array.from({ length: 241 }, (_, i) => sampleRoamingRegion(x, z, i / 4));
+    assert.ok(Math.max(...samples) > 0.95);
+    assert.ok(Math.min(...samples) === 0);
+  }
+  let filled = 0, absent = 0, softEdges = 0;
+  for (let z = -60; z <= 60; z += 2) for (let x = -60; x <= 60; x += 2) {
+    const region = sampleRoamingRegion(x, z, 4);
+    if (region > 0.8) filled++;
+    else if (region === 0) absent++;
+    else softEdges++;
+    assert.ok(Math.abs(region - sampleRoamingRegion(x + 0.37, z, 4)) < 0.12);
+    assert.ok(Math.abs(region - sampleRoamingRegion(x, z, 4 + 1 / 60)) < 0.06);
+  }
+  assert.ok(filled > 100 && absent > 100 && softEdges > 100);
 });
