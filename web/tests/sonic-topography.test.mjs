@@ -209,13 +209,6 @@ test('every meaningful analyzed beat produces an independent terrain pulse', () 
   assert.equal(selectTerrainBeatPulse({ type: 'pulse', strength: 0, low: 0, impact: 0 }), 0);
 });
 
-test('every non-zero terrain beat also injects one whole-surface jelly impulse', async () => {
-  const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
-  assert.match(source, /if \(beatPulse > 0\) \{\s*this\._elasticMotion\.trigger\(beatPulse, tide, this\._reducedMotion\)/);
-  assert.match(source, /float globalJelly = clamp\(uElastic\.w/);
-  assert.match(source, /float jellySpread = 1\.0 - globalJelly \* 0\.032/);
-});
-
 test('beat envelope creates a pronounced rise while tide remains only the ceiling', () => {
   const quiet = shapeTerrainBeatEnvelope(0);
   const ordinary = shapeTerrainBeatEnvelope(selectTerrainBeatPulse({

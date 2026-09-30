@@ -1,24 +1,28 @@
 const BAND_KEYS = ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'presence', 'brilliance', 'air'];
 const FREQUENCIES = [14, 10, 8];
 const DAMPING = [0.58, 0.64, 0.70];
-const BEAT_FREQUENCY = 12.5;
-const BEAT_DAMPING = 0.38;
+const JELLY_FREQUENCIES = [25, 29, 23];
+const JELLY_DAMPING = [0.30, 0.32, 0.29];
+const JELLY_LIMITS = [0.65, 0.42, 0.60];
+const JELLY_VELOCITY_LIMITS = [28, 22, 26];
 
 function unit(value) {
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
 }
 
-/** Three continuous time scales plus a per-beat whole-surface oscillator.
+/** Continuous terrain envelopes plus per-beat 3D surface displacement.
  * All state is fixed-size and allocation-free in the render loop.
  */
 export class TerrainElasticMotion {
   constructor() {
-    this.values = new Float32Array(4);
+    this.values = new Float32Array(3);
+    this.offset = new Float32Array(3);
     this._positions = new Float64Array(3);
     this._velocities = new Float64Array(3);
     this._targets = new Float64Array(3);
-    this._beatPosition = 0;
-    this._beatVelocity = 0;
+    this._jellyPositions = new Float64Array(3);
+    this._jellyVelocities = new Float64Array(3);
+    this._beatSequence = 0;
   }
 
   reset() {
@@ -26,20 +30,28 @@ export class TerrainElasticMotion {
     this._positions.fill(0);
     this._velocities.fill(0);
     this._targets.fill(0);
-    this._beatPosition = 0;
-    this._beatVelocity = 0;
+    this.offset.fill(0);
+    this._jellyPositions.fill(0);
+    this._jellyVelocities.fill(0);
+    this._beatSequence = 0;
   }
 
   /** Inject one independent impulse for every analyzed/realtime beat event. */
   trigger(strength, tide = 0, reducedMotion = false) {
     const power = (0.34 + unit(strength) * 0.66) * (0.92 + unit(tide) * 0.18);
     const motionScale = reducedMotion ? 0.34 : 1;
-    // A tiny instantaneous squeeze makes the following upward release legible
-    // even at 30 FPS. Velocity stacking is bounded for rapid double kicks.
-    this._beatPosition = Math.max(-0.34,
-      this._beatPosition - power * 0.105 * motionScale);
-    this._beatVelocity = Math.min(16.5,
-      this._beatVelocity + power * 12.4 * motionScale);
+    const angle = ++this._beatSequence * 2.399963229728653;
+    // Change velocity, never position: the surface leaves its resting point
+    // smoothly on the next frame. Deterministic directions and different axis
+    // frequencies make a small 3D wobble rather than a repeated vertical hop.
+    const impulse = power * motionScale;
+    this._jellyVelocities[0] += Math.cos(angle) * impulse * 18;
+    this._jellyVelocities[1] += impulse * 11.5;
+    this._jellyVelocities[2] += Math.sin(angle) * impulse * 16;
+    for (let i = 0; i < 3; i++) {
+      const limit = JELLY_VELOCITY_LIMITS[i];
+      this._jellyVelocities[i] = Math.max(-limit, Math.min(limit, this._jellyVelocities[i]));
+    }
   }
 
   update(frame, dt, reducedMotion = false) {
@@ -78,23 +90,26 @@ export class TerrainElasticMotion {
       this._velocities[i] = position === this._positions[i] ? nextVelocity : 0;
       this.values[i] = this._positions[i] * (reducedMotion ? 0.28 : 1);
     }
-    // Exact homogeneous underdamped oscillator around zero. It creates one
-    // compression -> rise -> recoil cycle per trigger and cannot be held high
-    // by sustained chorus energy.
-    const beatDecay = BEAT_DAMPING * BEAT_FREQUENCY;
-    const beatFrequency = BEAT_FREQUENCY * Math.sqrt(1 - BEAT_DAMPING ** 2);
-    const envelope = Math.exp(-beatDecay * step);
-    const cosine = Math.cos(beatFrequency * step);
-    const sine = Math.sin(beatFrequency * step);
-    const position = envelope * (this._beatPosition * cosine
-      + (this._beatVelocity + beatDecay * this._beatPosition) / beatFrequency * sine);
-    const velocity = envelope * (this._beatVelocity * cosine
-      - (beatDecay * this._beatVelocity + BEAT_FREQUENCY ** 2 * this._beatPosition)
-        / beatFrequency * sine);
-    this._beatPosition = Math.max(-0.42, Math.min(0.92, position));
-    this._beatVelocity = this._beatPosition === position
-      ? Math.max(-16.5, Math.min(16.5, velocity)) : 0;
-    this.values[3] = this._beatPosition;
+    // Three short, underdamped springs around the fixed scene origin. All
+    // columns share these offsets, including at the terrain height ceiling.
+    for (let i = 0; i < 3; i++) {
+      const omega = JELLY_FREQUENCIES[i];
+      const decay = JELLY_DAMPING[i] * omega;
+      const frequency = omega * Math.sqrt(1 - JELLY_DAMPING[i] ** 2);
+      const envelope = Math.exp(-decay * step);
+      const cosine = Math.cos(frequency * step);
+      const sine = Math.sin(frequency * step);
+      const previous = this._jellyPositions[i];
+      const velocity = this._jellyVelocities[i];
+      const position = envelope * (previous * cosine
+        + (velocity + decay * previous) / frequency * sine);
+      const nextVelocity = envelope * (velocity * cosine
+        - (decay * velocity + omega * omega * previous) / frequency * sine);
+      const limit = JELLY_LIMITS[i];
+      this._jellyPositions[i] = Math.max(-limit, Math.min(limit, position));
+      this._jellyVelocities[i] = position === this._jellyPositions[i] ? nextVelocity : 0;
+      this.offset[i] = this._jellyPositions[i];
+    }
     return this.values;
   }
 }

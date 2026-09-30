@@ -21,7 +21,7 @@ uniform float uAmplitude;
 uniform float uClimax;
 uniform float uBeatPulse;
 uniform float uBeatLight;
-uniform vec4 uElastic;
+uniform vec3 uElastic;
 uniform float uBands[8];
 uniform vec4 uRipples[10];
 varying float vEnergy;
@@ -281,26 +281,11 @@ void main() {
     + spectralLift * terrainHeightGate * uAmplitude * 0.62
     + elasticLift * uAmplitude
     + rippleLift * uAmplitude * 0.72;
-  // Every beat injects one signed spring cycle. Apply it across the complete
-  // terrain, with only a little spatial variation, so it reads as one elastic
-  // jelly surface rather than another local mound or ripple.
-  float globalJelly = clamp(uElastic.w, -0.42, 0.92);
-  float jellyShape = 0.80 + centerMound * 0.16 + broadWave * 0.04;
-  float heightCeiling = mix(6.2, 22.5, climaxDrive);
-  height = clamp(height, 0.12, heightCeiling);
-  // Saturated chorus columns must retain room for each beat. Cap the base
-  // first, then reserve a little of the upper range for the spring cycle;
-  // clamping rawHeight * springScale erased all motion at a tall plateau.
-  float headroomBlend = smoothstep(0.72, 1.0, height / heightCeiling);
-  float restHeight = height * (1.0 - headroomBlend * 0.18);
-  float beatRoom = min(restHeight * 0.32, heightCeiling - restHeight);
-  height = clamp(restHeight + globalJelly * beatRoom * jellyShape,
-    0.12, heightCeiling);
+  height = clamp(height, 0.12, mix(6.2, 22.5, climaxDrive));
 
   vec3 transformed = position;
   transformed.y = transformed.y * height + height * 0.5 - 2.65;
-  float jellySpread = 1.0 - globalJelly * 0.032;
-  transformed += vec3(aCell.x * jellySpread, 0.0, aCell.y * jellySpread);
+  transformed += vec3(aCell.x, 0.0, aCell.y);
 
   float tideEnergyFloor = mix(0.24, 0.90, sectionDrive);
   float beatEnergyGate = tideEnergyFloor
@@ -858,6 +843,7 @@ export class SonicTopographyStage {
     }
     if (!this.root.visible) {
       this._elasticMotion.reset();
+      this.root.position.set(0, -6.2, -18);
       for (const drop of this._drops) drop.active = false;
       this._previousSyntheticKick = 0;
       this._beatPulse = 0;
@@ -998,6 +984,11 @@ export class SonicTopographyStage {
   update(dt, elapsed, frame) {
     if (!this.root.visible) return;
     this._elasticMotion.update(frame, dt, this._reducedMotion);
+    // Move the complete terrain surface by a few tenths of a world unit per
+    // beat. This displacement is independent of column height and its clamp;
+    // the dedicated terrain scene keeps the camera and lyrics stationary.
+    const offset = this._elasticMotion.offset;
+    this.root.position.set(offset[0], -6.2 + offset[1], -18 + offset[2]);
     // This deliberately user-enabled preset keeps its slow, slider-controlled
     // yaw even when the OS requests reduced motion. The slider's 0 value is
     // the explicit off switch; other reduced-motion effects remain unchanged.

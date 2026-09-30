@@ -4,6 +4,7 @@ import { TerrainElasticMotion } from '../src/visual/TerrainElasticMotion.js';
 import { SonicTopographyStage } from '../src/visual/SonicTopographyStage.js';
 import { BeatScheduler } from '../src/core/BeatScheduler.js';
 import { BeatEngine } from '../src/core/BeatEngine.js';
+import { Group, Object3D, PerspectiveCamera } from 'three';
 
 const loud = Object.freeze({ active: true, source: 'realtime', energy: 1,
   subBass: 1, bass: 1, lowMid: 1, mid: 1, highMid: 1, kickEnvelope: 1 });
@@ -22,22 +23,31 @@ test('continuous audio alone excites delayed elastic modes with a bounded reboun
   assert.ok(history.every(values => values.slice(0, 3)
     .every(v => v >= -0.12 && v <= 1.121)));
   assert.ok(history[89].slice(0, 3).every(v => Math.abs(v - 1) < 0.001));
-  assert.equal(history[89][3], 0);
+  assert.deepEqual([...motion.offset], [0, 0, 0]);
 });
 
-test('every trigger creates a whole-terrain compression, rise and recoil cycle', () => {
+test('each beat causes a small 3D displacement and damped recoil without a position jump', () => {
   const motion = new TerrainElasticMotion();
   motion.trigger(0.35, 0.1);
-  assert.ok(motion._beatPosition < 0);
+  assert.deepEqual([...motion.offset], [0, 0, 0]);
   const firstCycle = [];
-  for (let n = 0; n < 55; n++) firstCycle.push(motion.update(null, 1 / 60)[3]);
-  assert.ok(Math.max(...firstCycle) > 0.28);
-  assert.ok(Math.min(...firstCycle) < -0.02);
+  for (let n = 0; n < 55; n++) {
+    motion.update(null, 1 / 60);
+    firstCycle.push([...motion.offset]);
+  }
+  for (let axis = 0; axis < 3; axis++) {
+    const values = firstCycle.map(v => v[axis]);
+    assert.ok(Math.max(...values) > 0.02 && Math.min(...values) < -0.02);
+  }
+  assert.ok(Math.max(...firstCycle.map(v => Math.hypot(...v))) > 0.2);
   motion.trigger(0.35, 0.1);
   const secondCycle = [];
-  for (let n = 0; n < 55; n++) secondCycle.push(motion.update(null, 1 / 60)[3]);
-  assert.ok(Math.max(...secondCycle) > 0.28); // next beat remains visible
-  assert.ok(Math.abs(secondCycle.at(-1)) < 0.025);
+  for (let n = 0; n < 55; n++) {
+    motion.update(null, 1 / 60);
+    secondCycle.push([...motion.offset]);
+  }
+  assert.ok(Math.max(...secondCycle.map(v => Math.hypot(...v))) > 0.2);
+  assert.ok(Math.hypot(...secondCycle.at(-1)) < 0.005);
 });
 
 test('rapid strong beats stack safely while reduced motion remains restrained', () => {
@@ -52,8 +62,10 @@ test('rapid strong beats stack safely while reduced motion remains restrained', 
     }
   }
   assert.ok([...normal.values].every(Number.isFinite));
-  assert.ok(normal.values[3] >= -0.42 && normal.values[3] <= 0.92);
-  assert.ok(Math.abs(reduced.values[3]) < Math.abs(normal.values[3]));
+  assert.ok(Math.abs(normal.offset[0]) <= 0.65 && Math.abs(normal.offset[1]) <= 0.42
+    && Math.abs(normal.offset[2]) <= 0.60);
+  assert.ok(Math.hypot(...normal.offset) < 1);
+  assert.ok(Math.hypot(...reduced.offset) < Math.hypot(...normal.offset));
 });
 
 test('the real scheduler delivers each analyzed beat once to the terrain spring', () => {
@@ -81,14 +93,14 @@ test('the real scheduler delivers each analyzed beat once to the terrain spring'
     const time = frame / 60;
     stage._uniforms.uTime.value = time;
     scheduler.tick(time, true);
-    const values = motion.update(loud, 1 / 60);
+    motion.update(loud, 1 / 60);
     if (received.length) {
       const index = received.at(-1);
-      peaks[index] = Math.max(peaks[index], values[3]);
+      peaks[index] = Math.max(peaks[index], Math.hypot(...motion.offset));
     }
   }
   assert.deepEqual(received, [0, 1, 2, 3, 4, 5, 6, 7]);
-  assert.ok(peaks.every(peak => peak > 0.35));
+  assert.ok(peaks.every(peak => peak > 0.25));
   scheduler.tick(10, false);
   assert.equal(received.length, 8);
 });
@@ -97,9 +109,12 @@ test('the per-beat oscillator has the same excursion at 30, 60 and 144 Hz', () =
   const results = [30, 60, 144].map(hz => {
     const motion = new TerrainElasticMotion();
     motion.trigger(0.6, 0.8);
-    return advance(motion, loud, 0.5, hz)[3];
+    advance(motion, loud, 0.5, hz);
+    return [...motion.offset];
   });
-  for (const value of results) assert.ok(Math.abs(value - results[0]) < 1e-6);
+  for (const values of results) for (let axis = 0; axis < 3; axis++) {
+    assert.ok(Math.abs(values[axis] - results[0][axis]) < 1e-6);
+  }
 });
 
 test('rebound is frame-rate independent at 30, 60 and 144 Hz', () => {
@@ -119,9 +134,13 @@ test('paused, silent and absent audio settle smoothly even with stale section en
     { active: true, source: 'analyzed', sectionEnergy: 1 }]) {
     const motion = new TerrainElasticMotion();
     advance(motion, loud, 1);
+    motion.trigger(0.8, 0.8);
+    advance(motion, loud, 0.1);
+    assert.ok(Math.hypot(...motion.offset) > 0.05);
     const first = [...motion.update(frame, 1 / 60)];
     assert.ok(first.slice(0, 3).every(v => v > 0.9)); // no snap to zero
     assert.ok(advance(motion, frame, 3).every(v => Math.abs(v) < 1e-5));
+    assert.ok(Math.hypot(...motion.offset) < 1e-5);
   }
 });
 
@@ -130,7 +149,6 @@ test('quiet passages remain alive; synthetic startup and reduced motion stay res
     energy: 0.01, kickEnvelope: 0.01, subBass: 0.01, bass: 0.01,
     lowMid: 0.01, mid: 0.01, highMid: 0.01 }, 1);
   assert.ok(quiet.slice(0, 3).every(v => v > 0 && v < 0.02));
-  assert.equal(quiet[3], 0);
   const fake = new TerrainElasticMotion();
   for (let n = 0; n < 180; n++) assert.ok(
     [...fake.update({ ...loud, source: 'synthetic' }, 1 / 60)].every(v => v < 0.20));
@@ -153,7 +171,7 @@ test('elastic state is reused and remains finite through extreme input and tab g
 test('the real terrain update drives the shared shader buffer without discrete beat events', () => {
   const motion = new TerrainElasticMotion();
   const stage = {
-    root: { visible: true, rotation: { y: 0 } }, _rotationScale: 0,
+    root: new Group(), _rotationScale: 0,
     _elasticMotion: motion, _reducedMotion: false,
     _uniforms: Object.fromEntries(['uTime', 'uClimax', 'uBeatPulse', 'uBeatLight']
       .map(key => [key, { value: 0 }])),
@@ -167,7 +185,7 @@ test('the real terrain update drives the shared shader buffer without discrete b
   for (let n = 0; n < 30; n++) SonicTopographyStage.prototype.update.call(stage, 1 / 60, n / 60, loud);
   assert.equal(stage._uniforms.uElastic.value, motion.values);
   assert.ok([...stage._uniforms.uElastic.value].slice(0, 3).every(v => v > 0.95));
-  assert.equal(stage._uniforms.uElastic.value[3], 0);
+  assert.deepEqual([...motion.offset], [0, 0, 0]);
   assert.equal(stage._uniforms.uBeatPulse.value, 0);
   const previous = [...motion.values];
   stage.root.visible = false;
@@ -175,8 +193,49 @@ test('the real terrain update drives the shared shader buffer without discrete b
   assert.deepEqual([...motion.values], previous); // hidden preset does no work
   stage._drops = [];
   SonicTopographyStage.prototype.setVisible.call(stage, false);
-  assert.deepEqual([...motion.values], [0, 0, 0, 0]);
+  assert.deepEqual([...motion.values], [0, 0, 0]);
+  assert.deepEqual(stage.root.position.toArray(), [0, -6.2, -18]);
   stage.root.visible = true;
   SonicTopographyStage.prototype.update.call(stage, 1 / 60, 2, loud);
   assert.ok(motion.values[0] > 0 && motion.values[0] < 0.04); // soft re-entry
+});
+
+test('terrain update displaces centre and edge equally and leaves camera, scale and heights alone', () => {
+  const motion = new TerrainElasticMotion();
+  const root = new Group();
+  root.position.set(0, -6.2, -18);
+  const centre = new Object3D();
+  const edge = new Object3D();
+  edge.position.set(65, 20, -40);
+  root.add(centre, edge);
+  const camera = new PerspectiveCamera();
+  camera.position.set(0, 54, 112);
+  const stage = {
+    root, camera, _rotationScale: 0, _elasticMotion: motion, _reducedMotion: false,
+    _uniforms: Object.fromEntries(['uTime', 'uClimax', 'uBeatPulse', 'uBeatLight']
+      .map(key => [key, { value: 0 }])),
+    _mistUniforms: { uTime: { value: 0 }, uEnergy: { value: 0 } },
+    _beatPulse: 0, _beatVisual: 0, _beatLight: 0, _responseLevel: 0.8, _lowPresence: 0,
+    _beatSequence: 0, _spawnRipple() {},
+    _bands: Array(8).fill(0), _ripples: [], _previousSyntheticKick: 0,
+    _lastSyntheticDropAt: -Infinity, _lastAnalyzedBeatAt: -Infinity,
+    _nextDropAt: Infinity, _updateFloatingBlocks() {}, _updateFallingDrops() {},
+  };
+  root.updateMatrixWorld(true);
+  const beforeCentre = centre.getWorldPosition(centre.position.clone());
+  const beforeEdge = edge.getWorldPosition(edge.position.clone());
+  SonicTopographyStage.prototype.onBeat.call(stage, { strength: 0.8, low: 0.9 });
+  assert.deepEqual(root.position.toArray(), [0, -6.2, -18]); // trigger never snaps
+  SonicTopographyStage.prototype.update.call(stage, 1 / 60, 1 / 60, loud);
+  root.updateMatrixWorld(true);
+  const centreDelta = centre.getWorldPosition(centre.position.clone()).sub(beforeCentre);
+  const edgeDelta = edge.getWorldPosition(edge.position.clone()).sub(beforeEdge);
+  assert.ok(centreDelta.length() > 0.1 && centreDelta.length() < 1);
+  assert.ok(centreDelta.distanceTo(edgeDelta) < 1e-12);
+  assert.deepEqual(root.scale.toArray(), [1, 1, 1]);
+  assert.deepEqual(edge.position.toArray(), [65, 20, -40]);
+  assert.deepEqual(camera.position.toArray(), [0, 54, 112]);
+  advance(motion, null, 3);
+  SonicTopographyStage.prototype.update.call(stage, 1 / 60, 3, null);
+  assert.ok(root.position.distanceTo(beforeCentre) < 1e-5);
 });
