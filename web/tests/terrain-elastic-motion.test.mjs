@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TerrainElasticMotion } from '../src/visual/TerrainElasticMotion.js';
 import { SonicTopographyStage } from '../src/visual/SonicTopographyStage.js';
+import { BeatScheduler } from '../src/core/BeatScheduler.js';
+import { BeatEngine } from '../src/core/BeatEngine.js';
 
 const loud = Object.freeze({ active: true, source: 'realtime', energy: 1,
   subBass: 1, bass: 1, lowMid: 1, mid: 1, highMid: 1, kickEnvelope: 1 });
@@ -52,6 +54,52 @@ test('rapid strong beats stack safely while reduced motion remains restrained', 
   assert.ok([...normal.values].every(Number.isFinite));
   assert.ok(normal.values[3] >= -0.42 && normal.values[3] <= 0.92);
   assert.ok(Math.abs(reduced.values[3]) < Math.abs(normal.values[3]));
+});
+
+test('the real scheduler delivers each analyzed beat once to the terrain spring', () => {
+  const engine = new BeatEngine();
+  const motion = new TerrainElasticMotion();
+  const stage = {
+    root: { visible: true }, _uniforms: { uTime: { value: 0 } },
+    _responseLevel: 0.8, _reducedMotion: false, _beatPulse: 0,
+    _elasticMotion: motion, _beatSequence: 0, _spawnRipple() {},
+  };
+  engine.loadBeatGrid(Array.from({ length: 8 }, (_, i) => ({
+    time: 0.1 + i * 0.5, type: 'pulse', strength: 0.5,
+    low: 0.6, sectionEnergy: 0.8,
+  })));
+  const received = [];
+  const scheduler = new BeatScheduler(engine, {
+    emit(event, beat) {
+      assert.equal(event, 'visual:beat');
+      received.push(beat.index);
+      SonicTopographyStage.prototype.onBeat.call(stage, beat);
+    },
+  });
+  const peaks = Array(8).fill(0);
+  for (let frame = 0; frame < 246; frame++) {
+    const time = frame / 60;
+    stage._uniforms.uTime.value = time;
+    scheduler.tick(time, true);
+    const values = motion.update(loud, 1 / 60);
+    if (received.length) {
+      const index = received.at(-1);
+      peaks[index] = Math.max(peaks[index], values[3]);
+    }
+  }
+  assert.deepEqual(received, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.ok(peaks.every(peak => peak > 0.35));
+  scheduler.tick(10, false);
+  assert.equal(received.length, 8);
+});
+
+test('the per-beat oscillator has the same excursion at 30, 60 and 144 Hz', () => {
+  const results = [30, 60, 144].map(hz => {
+    const motion = new TerrainElasticMotion();
+    motion.trigger(0.6, 0.8);
+    return advance(motion, loud, 0.5, hz)[3];
+  });
+  for (const value of results) assert.ok(Math.abs(value - results[0]) < 1e-6);
 });
 
 test('rebound is frame-rate independent at 30, 60 and 144 Hz', () => {

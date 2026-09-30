@@ -213,7 +213,6 @@ test('every non-zero terrain beat also injects one whole-surface jelly impulse',
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   assert.match(source, /if \(beatPulse > 0\) \{\s*this\._elasticMotion\.trigger\(beatPulse, tide, this\._reducedMotion\)/);
   assert.match(source, /float globalJelly = clamp\(uElastic\.w/);
-  assert.match(source, /height \*= max\(0\.82, 1\.0 \+ globalJelly \* 0\.32/);
   assert.match(source, /float jellySpread = 1\.0 - globalJelly \* 0\.032/);
 });
 

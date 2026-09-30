@@ -286,8 +286,16 @@ void main() {
   // jelly surface rather than another local mound or ripple.
   float globalJelly = clamp(uElastic.w, -0.42, 0.92);
   float jellyShape = 0.80 + centerMound * 0.16 + broadWave * 0.04;
-  height *= max(0.82, 1.0 + globalJelly * 0.32 * jellyShape);
-  height = clamp(height, 0.12, mix(6.2, 22.5, climaxDrive));
+  float heightCeiling = mix(6.2, 22.5, climaxDrive);
+  height = clamp(height, 0.12, heightCeiling);
+  // Saturated chorus columns must retain room for each beat. Cap the base
+  // first, then reserve a little of the upper range for the spring cycle;
+  // clamping rawHeight * springScale erased all motion at a tall plateau.
+  float headroomBlend = smoothstep(0.72, 1.0, height / heightCeiling);
+  float restHeight = height * (1.0 - headroomBlend * 0.18);
+  float beatRoom = min(restHeight * 0.32, heightCeiling - restHeight);
+  height = clamp(restHeight + globalJelly * beatRoom * jellyShape,
+    0.12, heightCeiling);
 
   vec3 transformed = position;
   transformed.y = transformed.y * height + height * 0.5 - 2.65;
