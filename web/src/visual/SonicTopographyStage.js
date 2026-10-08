@@ -33,6 +33,8 @@ varying float vSeed;
 varying float vPeakIntensity;
 varying float vRippleGlow;
 varying float vRippleWhite;
+varying float vFogDepth;
+varying float vFogHeight;
 
 // Visual terrain functions adapted from Sonic Topography 1.1.x.  Keeping the
 // noise in the vertex shader gives every fixed instance a continuous organic
@@ -330,7 +332,10 @@ void main() {
   vRadius = radius;
   vSide = 1.0 - smoothstep(-0.45, 0.50, position.y);
   vSeed = aSeed;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+  vec4 viewPosition = modelViewMatrix * vec4(transformed, 1.0);
+  vFogDepth = -viewPosition.z;
+  vFogHeight = max(transformed.y + 2.65, 0.0);
+  gl_Position = projectionMatrix * viewPosition;
 }
 `;
 
@@ -344,6 +349,7 @@ uniform vec3 uPeakColor;
 uniform float uBrightness;
 uniform float uOpacity;
 uniform float uLightCeiling;
+uniform float uFogEnergy;
 varying float vEnergy;
 varying float vRadius;
 varying float vSide;
@@ -351,6 +357,8 @@ varying float vSeed;
 varying float vPeakIntensity;
 varying float vRippleGlow;
 varying float vRippleWhite;
+varying float vFogDepth;
+varying float vFogHeight;
 
 void main() {
   float energy = clamp(vEnergy, 0.0, 1.0);
@@ -379,8 +387,15 @@ void main() {
   // final output also limits the white peak colour and edge sparks, not only
   // the spectral energy term that selected them.
   color *= uLightCeiling;
-  float boundaryFog = smoothstep(0.66, 0.94, vRadius);
-  color = mix(color, uCoolColor, boundaryFog * 0.62);
+  // Height-aware extinction wraps the outer columns, rather than painting a
+  // flat ring below them. Tall central peaks remain clear above the ground fog.
+  float edgeDensity = smoothstep(0.60, 0.97, vRadius);
+  float distanceDensity = 1.0 - exp(-max(vFogDepth - 140.0, 0.0) * 0.022);
+  float heightDensity = exp(-vFogHeight / 18.0);
+  float boundaryFog = 1.0 - exp(-(edgeDensity * 2.4
+    + distanceDensity * 0.65) * heightDensity);
+  vec3 fogColor = mix(uCoolColor, uAccentColor, uFogEnergy * 0.08) * 0.55;
+  color = mix(color, fogColor, boundaryFog);
   float alpha = uOpacity * (1.0 - smoothstep(0.74, 0.985, vRadius));
   if (alpha < 0.015) discard;
   gl_FragColor = vec4(color, alpha);
@@ -389,39 +404,40 @@ void main() {
 
 const MIST_VS = /* glsl */`
 precision highp float;
-varying vec2 vUv;
+varying vec3 vMistWorldPosition;
 void main() {
-  vUv = uv;
+  vMistWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
 const MIST_FS = /* glsl */`
 precision highp float;
-uniform float uTime;
 uniform float uEnergy;
 uniform float uOpacity;
+uniform vec3 uGroundCenter;
+uniform vec3 uBaseColor;
 uniform vec3 uCoolColor;
 uniform vec3 uAccentColor;
-varying vec2 vUv;
+varying vec3 vMistWorldPosition;
 
 void main() {
-  vec2 centered = vUv * 2.0 - 1.0;
-  float radius = length(centered);
-  float broadMist = smoothstep(0.43, 0.67, radius)
-    * (1.0 - smoothstep(0.91, 1.08, radius));
-  float edgeMist = smoothstep(0.68, 0.82, radius)
-    * (1.0 - smoothstep(0.94, 1.10, radius));
-  float drift = sin(centered.x * 13.0 + uTime * 0.16)
-    * cos(centered.y * 11.0 - uTime * 0.11);
-  float grain = 0.78 + drift * 0.12;
+  vec3 ray = normalize(vMistWorldPosition - cameraPosition);
+  // Project the viewing ray onto the ground only to locate the haze bank.
+  // The actual backdrop is an enclosing 3D sky, with no visible plane edge.
+  float travel = max(cameraPosition.y - uGroundCenter.y, 0.0)
+    / max(-ray.y, 0.001);
+  vec2 groundPoint = cameraPosition.xz + ray.xz * travel;
+  float radius = length(groundPoint - uGroundCenter.xz);
+  float skyBlend = smoothstep(62.0, 136.0, radius);
+  skyBlend = mix(skyBlend, 1.0, smoothstep(-0.05, 0.10, ray.y));
   float response = clamp(uEnergy, 0.0, 1.0);
-  vec3 fogColor = mix(uCoolColor, uAccentColor, 0.12 + response * 0.46);
-  fogColor *= 0.42 + response * 0.58;
-  float alpha = (broadMist * 0.16 + edgeMist * 0.28)
-    * grain * (0.72 + response * 0.70) * uOpacity;
-  if (alpha < 0.004) discard;
-  gl_FragColor = vec4(fogColor, alpha);
+  vec3 fogColor = mix(uCoolColor, uAccentColor, response * 0.08) * 0.55;
+  // A dark foothill transition gives depth; the same-hue haze continues up
+  // into the entire sky instead of stopping at the terrain's horizon.
+  vec3 groundColor = mix(uBaseColor, fogColor, 0.18);
+  vec3 skyColor = fogColor * (0.90 + max(ray.y, 0.0) * 0.10);
+  gl_FragColor = vec4(mix(groundColor, skyColor, skyBlend), uOpacity);
 }
 `;
 
@@ -801,6 +817,7 @@ export class SonicTopographyStage {
       uPeakColor: { value: palette.peak },
       uBrightness: { value: this._brightness },
       uLightCeiling: { value: TERRAIN_LIGHT_CEILING },
+      uFogEnergy: { value: 0 },
       uOpacity: { value: 1 },
     };
     const material = new THREE.ShaderMaterial({
@@ -822,29 +839,31 @@ export class SonicTopographyStage {
 
   _buildBoundaryMist() {
     this._mistUniforms = {
-      uTime: { value: 0 },
-      uEnergy: { value: 0 },
+      uEnergy: this._uniforms.uFogEnergy,
       uOpacity: { value: 1 },
+      uGroundCenter: { value: new THREE.Vector3(0, -8.85, -18) },
       // Share the live palette objects so cover-colour changes also recolour
       // the boundary transition without allocating or copying each frame.
       uCoolColor: this._uniforms.uCoolColor,
       uAccentColor: this._uniforms.uAccentColor,
+      uBaseColor: this._uniforms.uBaseColor,
     };
-    const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE * 1.28, TERRAIN_SIZE * 1.28);
+    // The camera sits inside this inexpensive sky volume. No ray marching,
+    // extra renderer, render target, or stacked transparent ground planes.
+    const geometry = new THREE.SphereGeometry(260, 32, 16);
     const material = new THREE.ShaderMaterial({
       uniforms: this._mistUniforms,
       vertexShader: MIST_VS,
       fragmentShader: MIST_FS,
       transparent: true,
       depthWrite: false,
-      depthTest: true,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      side: THREE.BackSide,
+      blending: THREE.NormalBlending,
     });
     this.boundaryMist = new THREE.Mesh(geometry, material);
     this.boundaryMist.name = 'sonic-boundary-mist';
-    this.boundaryMist.rotation.x = -Math.PI / 2;
-    this.boundaryMist.position.y = -2.2;
+    this.boundaryMist.position.copy(this.camera.position).sub(this.root.position);
     this.boundaryMist.renderOrder = 1;
     this.boundaryMist.frustumCulled = false;
     this.root.add(this.boundaryMist);
@@ -928,7 +947,14 @@ export class SonicTopographyStage {
   }
 
   render(renderer) {
-    if (this.root.visible) renderer.render(this.scene, this.camera);
+    if (!this.root.visible) return;
+    // Recenter in world space even after a full terrain rotation. Otherwise
+    // the sky's centre would orbit with the root and eventually clip the view.
+    this.root.updateMatrixWorld(true);
+    this.root.worldToLocal(this.boundaryMist.position.copy(this.camera.position));
+    // Keep local wallpapers visible through the atmosphere when enabled.
+    this._mistUniforms.uOpacity.value = renderer.getClearAlpha() < 1 ? 0.68 : 1;
+    renderer.render(this.scene, this.camera);
   }
 
   setAmplitude(value) {
@@ -1063,8 +1089,6 @@ export class SonicTopographyStage {
       this.root.rotation.y, dt, this._rotationScale,
     );
     this._uniforms.uTime.value = elapsed;
-    this._mistUniforms.uTime.value = elapsed;
-    this._mistUniforms.uEnergy.value = clamp01(frame?.energy);
     this._uniforms.uClimax.value = clamp01(frame?.sectionEnergy);
     this._beatPulse *= Math.exp(-dt / 0.18);
     if (this._beatPulse < 0.001) this._beatPulse = 0;
@@ -1087,6 +1111,11 @@ export class SonicTopographyStage {
     const responseTau = responseTarget > this._responseLevel ? 0.16 : 0.78;
     this._responseLevel += (responseTarget - this._responseLevel)
       * (1 - Math.exp(-dt / responseTau));
+    // Reuse the slow section envelope: atmosphere should breathe, never flash
+    // with the fast kick/light envelope or change colour independently.
+    this._mistUniforms.uEnergy.value = this._responseLevel;
+    this._mistUniforms.uGroundCenter.value.copy(this.root.position);
+    this._mistUniforms.uGroundCenter.value.y -= 2.65;
     const signalActivity = Math.max(
       clamp01(frame?.energy),
       clamp01(frame?.sectionEnergy),

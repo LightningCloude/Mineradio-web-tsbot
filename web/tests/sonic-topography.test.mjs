@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { Color } from 'three';
+import { BackSide, Color, Group, NormalBlending, PerspectiveCamera, Vector3 } from 'three';
 
 import {
   selectRippleProfile,
@@ -489,7 +489,7 @@ test('terrain columns omit only the hidden bottom face and peak light stays cont
   assert.match(source, /this\.root\.rotation\.y = -0\.35/);
 });
 
-test('moving regions group height and response visibility while preserving the previous palette shader', async () => {
+test('moving regions group height and response visibility while preserving the pre-fog palette pipeline', async () => {
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   const field = source.match(/float roamingMask = ([\s\S]*?)float rippleLift =/)[1];
   assert.match(field, /roamingWaveMask\(aCell, uTime \* uWaveMotionScale\)/);
@@ -506,8 +506,10 @@ test('moving regions group height and response visibility while preserving the p
   assert.doesNotMatch(output, /colorFloor|colorBlock/);
   assert.match(source, /regionEnergy = roamingRegion \* roamingActivity/);
   const fragment = source.match(/const TERRAIN_FS.*?`([\s\S]*?)`;/)[1].replace(/\r\n/g, '\n');
-  assert.equal(createHash('sha256').update(fragment).digest('hex'),
-    '362af9150e3ebb1106c9ee8be22bdbea43dab60cd2736feeeed1a8bf75d66388');
+  const colorPipeline = fragment.slice(fragment.indexOf('void main()'),
+    fragment.indexOf('// Height-aware extinction')).trim();
+  assert.equal(createHash('sha256').update(colorPipeline).digest('hex'),
+    '9537f3572c87b4c2aff212d4ca18c2216194c484967b0386e9ebdd15b4d3e2bf');
   assert.doesNotMatch(source, /colorFloor|colorBlock|sideLight = max/);
 });
 
@@ -531,14 +533,78 @@ test('copied non-commercial visual portions retain an explicit source notice', a
   assert.match(notice, /Mineradio/);
 });
 
-test('terrain boundary fades into a response-coloured independent mist ring', async () => {
+test('terrain boundary uses height and view depth to blend into the same-hue atmosphere', async () => {
   const source = await readFile(new URL('../src/visual/SonicTopographyStage.js', import.meta.url), 'utf8');
   assert.match(source, /sonic-boundary-mist/);
   assert.match(source, /uCoolColor: this\._uniforms\.uCoolColor/);
   assert.match(source, /uAccentColor: this\._uniforms\.uAccentColor/);
   assert.match(source, /1\.0 - smoothstep\(0\.74, 0\.985, vRadius\)/);
-  assert.match(source, /this\._mistUniforms\.uEnergy\.value = clamp01\(frame\?\.energy\)/);
+  assert.match(source, /vFogDepth = -viewPosition\.z/);
+  assert.match(source, /heightDensity = exp\(-vFogHeight \/ 18\.0\)/);
+  assert.match(source, /distanceDensity = 1\.0 - exp\(-max\(vFogDepth - 140\.0/);
+  assert.match(source, /this\._mistUniforms\.uEnergy\.value = this\._responseLevel/);
+  assert.match(source, /uEnergy: this\._uniforms\.uFogEnergy/);
   assert.match(source, /this\.boundaryMist\.geometry\.dispose|this\.boundaryMist/);
+});
+
+function makeMistStage() {
+  const palette = createTerrainPalette();
+  const stage = {
+    root: new Group(),
+    camera: new PerspectiveCamera(48, 16 / 9, 0.1, 360),
+    _uniforms: { uCoolColor: { value: palette.cool },
+      uAccentColor: { value: palette.accent }, uBaseColor: { value: palette.base },
+      uFogEnergy: { value: 0 } },
+  };
+  stage.root.position.set(0, -6.2, -18);
+  stage.camera.position.set(0, 54, 112);
+  SonicTopographyStage.prototype._buildBoundaryMist.call(stage);
+  return stage;
+}
+
+test('boundary atmosphere encloses the camera without a ground plane or additive bright rim', () => {
+  const stage = makeMistStage();
+  try {
+    assert.equal(stage.root.children.length, 1);
+    assert.equal(stage.boundaryMist.geometry.type, 'SphereGeometry');
+    assert.equal(stage.boundaryMist.material.side, BackSide);
+    assert.equal(stage.boundaryMist.material.blending, NormalBlending);
+    assert.equal(stage.boundaryMist.material.depthWrite, false);
+    assert.equal(stage.boundaryMist.material.depthTest, false);
+    assert.equal(stage._mistUniforms.uCoolColor, stage._uniforms.uCoolColor);
+    assert.equal(stage._mistUniforms.uAccentColor, stage._uniforms.uAccentColor);
+    assert.equal(stage._mistUniforms.uEnergy, stage._uniforms.uFogEnergy);
+    assert.match(stage.boundaryMist.material.fragmentShader, /cameraPosition/);
+    assert.doesNotMatch(stage.boundaryMist.material.fragmentShader, /broadMist|edgeMist/);
+  } finally {
+    stage.boundaryMist.geometry.dispose();
+    stage.boundaryMist.material.dispose();
+  }
+});
+
+test('atmosphere stays centred through a full rotation and respects local wallpaper transparency', () => {
+  const stage = makeMistStage();
+  let alpha = 1, renders = 0;
+  const renderer = { getClearAlpha: () => alpha, render: () => { renders++; } };
+  const centre = new Vector3();
+  try {
+    for (let turn = 0; turn <= 12; turn++) {
+      stage.root.rotation.y = turn * Math.PI / 6;
+      SonicTopographyStage.prototype.render.call(stage, renderer);
+      stage.boundaryMist.getWorldPosition(centre);
+      assert.ok(centre.distanceTo(stage.camera.position) < 1e-8);
+      assert.equal(stage._mistUniforms.uOpacity.value, 1);
+    }
+    alpha = 0;
+    SonicTopographyStage.prototype.render.call(stage, renderer);
+    assert.equal(stage._mistUniforms.uOpacity.value, 0.68);
+    stage.root.visible = false;
+    SonicTopographyStage.prototype.render.call(stage, renderer);
+    assert.equal(renders, 14);
+  } finally {
+    stage.boundaryMist.geometry.dispose();
+    stage.boundaryMist.material.dispose();
+  }
 });
 
 test('terrain uses an independent scene and camera before the lyric scene', async () => {

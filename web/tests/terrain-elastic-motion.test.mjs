@@ -195,7 +195,7 @@ test('the real terrain update drives the shared shader buffer without discrete b
     _elasticMotion: motion, _reducedMotion: false,
     _uniforms: Object.fromEntries(['uTime', 'uClimax', 'uBeatPulse', 'uBeatLight']
       .map(key => [key, { value: 0 }])),
-    _mistUniforms: { uTime: { value: 0 }, uEnergy: { value: 0 } },
+    _mistUniforms: { uEnergy: { value: 0 }, uGroundCenter: { value: new Vector3() } },
     _beatPulse: 0, _beatVisual: 0, _beatLight: 0, _responseLevel: 0, _lowPresence: 0,
     _bands: Array(8).fill(0), _ripples: [], _previousSyntheticKick: 0,
     _lastSyntheticDropAt: -Infinity, _lastAnalyzedBeatAt: -Infinity,
@@ -234,7 +234,7 @@ test('terrain update displaces centre and edge equally and leaves camera, scale 
     root, camera, _rotationScale: 0, _elasticMotion: motion, _reducedMotion: false,
     _uniforms: Object.fromEntries(['uTime', 'uClimax', 'uBeatPulse', 'uBeatLight']
       .map(key => [key, { value: 0 }])),
-    _mistUniforms: { uTime: { value: 0 }, uEnergy: { value: 0 } },
+    _mistUniforms: { uEnergy: { value: 0 }, uGroundCenter: { value: new Vector3() } },
     _beatPulse: 0, _beatVisual: 0, _beatLight: 0, _responseLevel: 0.8, _lowPresence: 0,
     _beatSequence: 0, _spawnRipple() {},
     _bands: Array(8).fill(0), _ripples: [], _previousSyntheticKick: 0,
@@ -255,6 +255,9 @@ test('terrain update displaces centre and edge equally and leaves camera, scale 
   assert.deepEqual(root.scale.toArray(), [1, 1, 1]);
   assert.deepEqual(edge.position.toArray(), [65, 20, -40]);
   assert.deepEqual(camera.position.toArray(), [0, 54, 112]);
+  assert.ok(stage._mistUniforms.uGroundCenter.value.distanceTo(
+    root.position.clone().add(new Vector3(0, -2.65, 0))) < 1e-10);
+  assert.equal(stage._mistUniforms.uEnergy.value, stage._responseLevel);
   advance(motion, null, 3);
   SonicTopographyStage.prototype.update.call(stage, 1 / 60, 3, null);
   assert.ok(root.position.distanceTo(beforeCentre) < 1e-5);
