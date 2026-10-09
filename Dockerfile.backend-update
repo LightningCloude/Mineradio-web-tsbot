@@ -1,6 +1,10 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+# Replace source trees exactly; COPY alone preserves deleted legacy modules.
+# This removes image-layer code only, never mounted runtime data or configuration.
+RUN rm -rf /app/backend /app/proto
+
 COPY backend /app/backend
 COPY proto /app/proto
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/tsbot/
