@@ -1,5 +1,17 @@
 services:
   voice-service:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "voice-service", "--healthcheck", "127.0.0.1:50051"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     build:
       context: .
       dockerfile: Dockerfile.voice-service
@@ -13,6 +25,18 @@ services:
       - voicetmp:/app/tmp
 
   backend:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8009/health/ready', timeout=4).close()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -24,7 +48,8 @@ services:
       TSBOT_VOICE_GRPC_ADDR: voice-service:50051
       DATABASE_URL: sqlite:///./data/tsbot.db
     depends_on:
-      - voice-service
+      voice-service:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8009:8009"
     volumes:
@@ -33,11 +58,24 @@ services:
       - voicetmp:/app/tmp
 
   web:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ && wget -q -O /dev/null http://127.0.0.1:8080/api/health/ready"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     build:
       context: .
       dockerfile: Dockerfile.web
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "8080:8080"
 

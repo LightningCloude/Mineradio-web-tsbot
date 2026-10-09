@@ -26,4 +26,6 @@ COPY LICENSES /usr/share/licenses/tsbot/LICENSES
 
 EXPOSE 50051
 
+HEALTHCHECK --interval=20s --timeout=5s --start-period=60s --retries=3 CMD voice-service --healthcheck 127.0.0.1:50051
+
 CMD ["voice-service", "0.0.0.0:50051"]

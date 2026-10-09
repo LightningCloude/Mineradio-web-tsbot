@@ -171,6 +171,86 @@ def check_safe_panels(page, timeout_ms: int) -> str:
     return "search, playlist, and visual settings panels are interactive"
 
 
+def check_control_accessibility(page, timeout_ms: int) -> str:
+    controls = page.locator('.player-bar button[data-action]')
+    if controls.count() != 10:
+        raise SmokeFailure(f"expected 10 unchanged button actions, found {controls.count()}")
+    viewport = page.viewport_size
+    for control in controls.all():
+        box = control.bounding_box()
+        if not box or box["x"] < -1 or box["y"] < -1 or box["x"] + box["width"] > viewport["width"] + 1 or box["y"] + box["height"] > viewport["height"] + 1:
+            raise SmokeFailure(f"button outside viewport: {control.get_attribute('data-action')}")
+    return "all 10 existing controls fit inside the viewport"
+
+
+def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
+    page.locator('[data-action="vis-settings"]').click()
+    selector = page.locator("#visual-performance-mode")
+    if selector.locator("option").evaluate_all("options => options.map(option => option.value)") != ["high", "auto", "saving"]:
+        raise SmokeFailure("quality options changed unexpectedly")
+    if selector.input_value() != "high":
+        raise SmokeFailure("fresh context did not preserve the existing high-quality default")
+    page.wait_for_function(
+        "() => document.querySelector('#audio-source-status')?.textContent.includes('非实时频谱')",
+        timeout=timeout_ms,
+    )
+    if float(page.locator("#audio-input-level").get_attribute("value") or 0) != 0:
+        raise SmokeFailure("fixture without capture reported a nonzero input level")
+    for mode in ("auto", "saving", "high"):
+        selector.select_option(mode)
+        page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+        page.locator('[data-action="vis-settings"]').click()
+        selector = page.locator("#visual-performance-mode")
+        if selector.input_value() != mode:
+            raise SmokeFailure(f"quality mode was not restored: {mode}")
+    page.keyboard.press("Escape")
+    return "three persisted quality modes; fallback clearly marked non-realtime with zero capture level"
+
+
+def check_preset_lifecycle(page, timeout_ms: int) -> str:
+    page.locator('[data-action="vis-settings"]').click()
+    for index in range(30):
+        preset = index % 3
+        page.locator(f'.preset-btn[data-preset="{preset}"]').click()
+        page.wait_for_function(
+            "expected => document.querySelector('.preset-btn.active')?.dataset.preset === String(expected)",
+            arg=preset, timeout=timeout_ms,
+        )
+    page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+    page.locator('[data-action="vis-settings"]').click()
+    if page.locator('.preset-btn.active').get_attribute("data-preset") != "2":
+        raise SmokeFailure("last visual preset was not restored")
+    page.keyboard.press("Escape")
+    page.locator('[data-action="shelf"]').click()
+    page.wait_for_timeout(300)
+    page.keyboard.press("Escape")
+    return "30 preset changes, persisted Sonic preset, and shelf open/close completed"
+
+
+def check_webgl_recovery(page, timeout_ms: int) -> str:
+    supported = page.evaluate("""() => {
+      const canvas = document.querySelector('#particle-canvas');
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      const extension = gl?.getExtension('WEBGL_lose_context');
+      if (!extension) return false;
+      window.__ciContext = { lost: false, restored: false, extension };
+      canvas.addEventListener('webglcontextlost', () => { window.__ciContext.lost = true; }, { once: true });
+      canvas.addEventListener('webglcontextrestored', () => { window.__ciContext.restored = true; }, { once: true });
+      extension.loseContext();
+      return true;
+    }""")
+    if not supported:
+        return "WEBGL_lose_context unsupported; explicit loss check not available"
+    page.wait_for_function("() => window.__ciContext.lost", timeout=timeout_ms)
+    page.wait_for_timeout(150)
+    page.evaluate("() => window.__ciContext.extension.restoreContext()")
+    page.wait_for_function("() => window.__ciContext.restored", timeout=timeout_ms)
+    page.wait_for_timeout(350)
+    if page.evaluate("() => (document.querySelector('#particle-canvas').getContext('webgl2') || document.querySelector('#particle-canvas').getContext('webgl')).isContextLost()"):
+        raise SmokeFailure("WebGL context did not recover")
+    return "actual WebGL loss and restore events completed with the render loop intact"
+
+
 def seed_ephemeral_wallpaper(page) -> None:
     page.evaluate(
         """
@@ -445,7 +525,11 @@ def run_browser_smoke(args: argparse.Namespace, base_url: str) -> dict[str, Any]
             ) from exc
         context = browser.new_context(
             ignore_https_errors=args.insecure,
-            viewport={"width": 1440, "height": 900},
+            viewport={"width": getattr(args, "viewport_width", 1440), "height": getattr(args, "viewport_height", 900)},
+            is_mobile=getattr(args, "mobile", False),
+            has_touch=getattr(args, "mobile", False),
+            **({"user_agent": "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"}
+               if getattr(args, "mobile", False) else {}),
         )
         if args.api_token.strip():
             context.add_init_script(api_token_init_script(args.api_token))
@@ -558,6 +642,12 @@ def run_browser_smoke(args: argparse.Namespace, base_url: str) -> dict[str, Any]
 
         reporter.run("cover-routing", cover_routing_check)
 
+        if getattr(args, "exercise_visuals", False):
+            reporter.run("control-accessibility", lambda: check_control_accessibility(page, timeout_ms))
+            reporter.run("quality-and-audio-source", lambda: check_quality_and_source(page, base_url, timeout_ms))
+            reporter.run("preset-lifecycle", lambda: check_preset_lifecycle(page, timeout_ms))
+            reporter.run("webgl-recovery", lambda: check_webgl_recovery(page, timeout_ms))
+
         if args.mode == "stateful":
             reporter.run(
                 "search-enqueue-cleanup",
@@ -643,6 +733,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--insecure", action="store_true")
+    parser.add_argument("--viewport-width", type=int, default=1440)
+    parser.add_argument("--viewport-height", type=int, default=900)
+    parser.add_argument("--mobile", action="store_true", help="Use a touch-enabled mobile browser context")
+    parser.add_argument("--exercise-visuals", action="store_true", help="Exercise browser-local quality/preset controls and WebGL recovery")
     parser.add_argument("--json", action="store_true", dest="json_output")
     parser.add_argument(
         "--artifacts-dir",
@@ -667,6 +761,8 @@ def main(argv: list[str] | None = None) -> int:
         base_url = normalize_base_url(args.base_url)
         if args.timeout <= 0:
             raise ValueError("--timeout must be greater than zero")
+        if args.viewport_width < 100 or args.viewport_height < 100:
+            raise ValueError("viewport dimensions must be at least 100 pixels")
         validate_mutation_policy(args, base_url)
         report = run_browser_smoke(args, base_url)
     except (ValueError, SmokeFailure) as exc:

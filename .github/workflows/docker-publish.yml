@@ -15,6 +15,9 @@ name: Docker Publish
       - 'Dockerfile.web'
       - 'docker-compose.yml'
       - 'docker-compose.prebuilt.yml'
+      - 'docker-compose.portable.yml'
+      - 'scripts/**'
+      - 'tests/**'
       - 'docker/**'
       - 'README.md'
       - 'README.en.md'
@@ -45,6 +48,9 @@ name: Docker Publish
       - 'Dockerfile.web'
       - 'docker-compose.yml'
       - 'docker-compose.prebuilt.yml'
+      - 'docker-compose.portable.yml'
+      - 'scripts/**'
+      - 'tests/**'
       - 'docker/**'
       - 'README.md'
       - 'README.en.md'
@@ -115,6 +121,21 @@ jobs:
           npm --prefix web test
           npm --prefix web run build
           npm --prefix web audit
+
+      - name: Install Chromium for browser regression checks
+        run: python -m playwright install --with-deps chromium
+
+      - name: Smoke test built web with isolated desktop and mobile fixtures
+        run: python scripts/ci_browser_smoke.py --report artifacts/ci-browser/report.json
+
+      - name: Upload browser regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-regression-evidence
+          path: artifacts/ci-browser/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Install voice-service build dependencies
         run: |
@@ -288,9 +309,13 @@ jobs:
             --exclude '*.pyc' \
             backend/ "$bundle_dir/backend/"
           rsync -a proto/ "$bundle_dir/proto/"
+          mkdir -p "$bundle_dir/scripts"
+          cp scripts/workspace_recovery.py "$bundle_dir/scripts/"
           rsync -a web/dist/ "$bundle_dir/web/dist/"
+          cp web/README.md "$bundle_dir/web/README.md"
+          cp -R docs "$bundle_dir/docs"
           install -m 755 voice-service/target/release/voice-service "$bundle_dir/bin/voice-service"
-          cp tsbot.env.example README.md README.en.md HOWTOSTART.md LICENSE THIRD_PARTY_NOTICES.md docker-compose.yml docker-compose.prebuilt.yml "$bundle_dir/"
+          cp tsbot.env.example README.md README.en.md HOWTOSTART.md LOGGING.md LICENSE THIRD_PARTY_NOTICES.md docker-compose.yml docker-compose.prebuilt.yml "$bundle_dir/"
           cp -R LICENSES "$bundle_dir/LICENSES"
           cp run-backend.sh run-web.sh run-voicemake.sh nohup-start.sh nohup-stop.sh nohup-status.sh "$bundle_dir/"
           mkdir -p dist

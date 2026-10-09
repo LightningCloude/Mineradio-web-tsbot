@@ -3,3 +3,7 @@ FROM ${BASE_IMAGE}
 
 COPY backend /app/backend
 COPY proto /app/proto
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/tsbot/
+COPY LICENSES /usr/share/licenses/tsbot/LICENSES
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=60s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8009/health/ready', timeout=4).close()"
