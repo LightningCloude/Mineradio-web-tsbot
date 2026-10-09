@@ -19,9 +19,13 @@ analysis, and responsive visuals.
   water-drop ripples.
 - Three lyric modes: original, translation, and original plus translation,
   with line highlighting and sweep timing aligned to lyric boundaries.
-- Per-browser audio-analysis cache, current-track analysis, queue-wide
-  pre-analysis, and shelf analysis-status hints. Analysis data is never
-  uploaded to or stored by the server.
+- Local system-audio beat detection with input-level/source diagnostics and
+  silence guidance. Audio capture requires user approval over HTTPS.
+- Existing per-browser beat caches can be reused. Offline song downloads and
+  queue pre-analysis are retired; cache misses use a low-tide synthetic fallback.
+  The browser never downloads whole songs through the server for beat analysis.
+- Optional high-quality, automatic-resolution and power-saving render modes.
+  Default appearance and terrain density stay unchanged.
 - Local browser wallpapers. Selected videos stay in the browser and are never
   served or uploaded by this project.
 - Built-in QQ Music and Bilibili adapters. The legacy Netease adapter remains
@@ -37,7 +41,6 @@ Browser (Vite + vanilla JavaScript + Three.js)
         ▼
 FastAPI backend ── gRPC ──► Rust voice-service ──► TeamSpeak
         │
-        ├── browser audio analysis and local cache
         ├── QQ Music / Bilibili adapters
         └── SQLite, admin sessions, and runtime settings
 ```
@@ -51,6 +54,11 @@ Key directories:
 - `proto/`: backend/voice-service protocol definitions.
 - `docker-compose*.yml` and `Dockerfile.*`: source, prebuilt, and offline container deployment.
 - `tests/` and `web/tests/`: backend regression, release-security, and frontend contract tests.
+
+Realtime frequency analysis runs exclusively in the browser on user-approved
+system audio. The backend never receives or shares beat-analysis caches.
+See the [maintenance guide](docs/MAINTENANCE.md) for private full-workspace backups,
+SHA256 verification, fresh-directory recovery, readiness and compatibility mode.
 
 ## Quick start
 
