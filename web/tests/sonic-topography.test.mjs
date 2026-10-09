@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { BackSide, Color, Group, NormalBlending, PerspectiveCamera, Vector3 } from 'three';
+import { BackSide, Color, Group, NormalBlending, PerspectiveCamera, Vector3, Matrix4, Quaternion } from 'three';
 
 import {
   selectRippleProfile,
@@ -149,6 +149,8 @@ test('one vertical falling drop splashes only when it reaches its own ripple ori
   const trailPositions = [];
   const impacts = [];
   const stage = {
+    _poolMatrix: new Matrix4(), _poolTrailMatrix: new Matrix4(),
+    _poolPosition: new Vector3(), _poolScale: new Vector3(), _poolQuaternion: new Quaternion(),
     _drops: Array.from({ length: 6 }, () => ({ active: false, age: 0 })),
     _dropCursor: 0,
     _dropSequence: 0,

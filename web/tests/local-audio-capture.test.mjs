@@ -37,6 +37,26 @@ function memoryStorage() {
   };
 }
 
+test('stopping during screen chooser discards late stream and duplicate starts', async () => {
+  const stream = streamWith();
+  let finish;
+  let connected = 0;
+  const capture = new LocalAudioCapture({
+    analyzer: { prepare() {}, connectStream() { connected++; return true; }, async resume() { return true; }, disconnect() {} },
+    bus: { emit() {} }, storage: memoryStorage(), secureContext: true,
+    mediaDevices: { getDisplayMedia() { return new Promise(resolve => { finish = resolve; }); } },
+  });
+  const pending = capture.start();
+  await Promise.resolve();
+  await assert.rejects(() => capture.start(), /正在进行中/);
+  capture.stop();
+  finish(stream);
+  await pending;
+  assert.equal(capture.active, false);
+  assert.equal(connected, 0);
+  assert.ok(stream.getTracks().every(item => item.stopped));
+});
+
 test('system audio capture connects the stream and stops every track cleanly', async () => {
   const stream = streamWith();
   const calls = [];

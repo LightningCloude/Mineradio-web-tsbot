@@ -8,6 +8,8 @@ import { audioAnalyzer } from './core/AudioAnalyzer.js';
 import { VisualAudioFrameAdapter } from './core/VisualAudioFrame.js';
 import { localBeatAnalysisCache } from './core/LocalBeatAnalysisCache.js';
 import { localAudioCapture } from './core/LocalAudioCapture.js';
+import { AudioSignalMonitor } from './core/AudioSignalMonitor.js';
+import { bootstrapPlayback } from './core/PlaybackBootstrap.js';
 
 import { ParticleStage } from './visual/ParticleStage.js';
 import { CameraDirector } from './visual/CameraDirector.js';
@@ -29,6 +31,7 @@ import { getLyricTimelinePosition } from './shared/LyricTiming.js';
 let _preparedTrackId = null;
 let _analysisReadyTrackId = null;
 const visualAudioAdapter = new VisualAudioFrameAdapter(audioAnalyzer, eventBus);
+const audioSignalMonitor = new AudioSignalMonitor(eventBus);
 
 function _emitBeatAnalysisStatus(song, trackId, status, source = '') {
   eventBus.emit('beat-analysis:status', {
@@ -148,7 +151,12 @@ function init() {
     }
     visualAudioAdapter.setSectionEnergy(beatEngine.getSectionEnergyAt(position));
     visualAudioAdapter.setAnalyzedFrame(beatEngine.getAnalyzedFrameAt(position));
-    particleStage.setVisualAudioFrame(visualAudioAdapter.tick(dt, visualActive));
+    const visualFrame = visualAudioAdapter.tick(dt, visualActive);
+    particleStage.setVisualAudioFrame(visualFrame);
+    audioSignalMonitor.tick(dt, {
+      captureActive: localAudioCapture.active,
+      input: audioAnalyzer.getInputStatus(), frame: visualFrame, playing: playbackActive,
+    });
     if (playbackActive) state.syncLyrics(getLyricTimelinePosition(position));
 
     if (!particleStage._shelfActive) cameraDirector.tick(dt);
@@ -221,33 +229,7 @@ function init() {
   });
 
   // ── Init: fetch current status ──
-  api.getStatus().then(status => {
-    if (Number.isFinite(Number(status && status.volume_percent))) {
-      eventBus.emit('volume:changed', Number(status.volume_percent));
-    }
-    if (status && status.now_playing_title) {
-      state.updatePlayback({
-        status: status.state === 'playing' ? 'playing' : 'paused',
-        position: status.current_time || 0,
-        song: {
-          track_id: status.track_id,
-          queue_id: status.track_id,
-          title: status.now_playing_title,
-          artist: status.now_playing_artist,
-          album: status.now_playing_album,
-          cover: status.artwork_url,
-          source_url: status.now_playing_source_url,
-          duration: status.duration,
-          bpm: 120,
-        },
-        bpm: 120,
-      });
-    }
-  }).catch(() => {});
-
-  api.getQueue().then(data => {
-    state.updateQueue(data.items || data.queue || data || []);
-  }).catch(() => {});
+  bootstrapPlayback({ apiClient: api, stateManager: state, bus: eventBus });
 
   // ── Keyboard shortcuts ──
   document.addEventListener('keydown', (e) => {

@@ -4,6 +4,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from backend.tests.runtime_isolation import configure_test_runtime
+
+configure_test_runtime()
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException

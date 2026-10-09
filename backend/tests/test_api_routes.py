@@ -1,23 +1,32 @@
 from __future__ import annotations
 
-import os
+import asyncio
+import hashlib
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from backend.tests.runtime_isolation import configure_test_runtime
+
 
 _IMPORT_ERROR: ModuleNotFoundError | None = None
-_TEST_DB_PATH = Path(tempfile.gettempdir()) / f"minerats-api-routes-{os.getpid()}.db"
-_ORIGINAL_CWD = Path.cwd()
+_TEST_RUNTIME = configure_test_runtime()
+_TEST_DB_PATH = _TEST_RUNTIME / "tsbot.db"
+_WORKSPACE = Path(__file__).resolve().parents[2]
+
+
+def _workspace_runtime_snapshot():
+    paths = [_WORKSPACE / name for name in ("tsbot.db", "tsbot.env", "backend/.env")]
+    for folder in ("logs", "data/uploads"):
+        root = _WORKSPACE / folder
+        if root.exists():
+            paths.extend(path for path in root.rglob("*") if path.is_file())
+    return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths if path.is_file()}
+
+
+_IMPORT_SNAPSHOT = _workspace_runtime_snapshot()
 
 try:
-    os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH.as_posix()}"
-    os.environ["TSBOT_API_TOKEN"] = "test-api-token"
-    os.environ["TSBOT_ADMIN_TOKEN"] = "test-admin-token"
-    os.environ["TSBOT_COOKIE_KEY"] = "test-cookie-key"
-    os.chdir(tempfile.gettempdir())
-
     from fastapi.testclient import TestClient
     from starlette.websockets import WebSocketDisconnect
 
@@ -28,14 +37,14 @@ except ModuleNotFoundError as exc:
     TestClient = None
     db = None
     main = None
-finally:
-    os.chdir(_ORIGINAL_CWD)
 
 
 @unittest.skipIf(main is None, f"backend runtime dependencies unavailable: {_IMPORT_ERROR}")
 class ApiRouteIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if _workspace_runtime_snapshot() != _IMPORT_SNAPSHOT:
+            raise AssertionError("Backend test imports changed workspace runtime files")
         if _TEST_DB_PATH.exists():
             _TEST_DB_PATH.unlink()
         main.create_db_and_tables()
@@ -47,6 +56,20 @@ class ApiRouteIntegrationTests(unittest.TestCase):
         db._engine.dispose()
         if _TEST_DB_PATH.exists():
             _TEST_DB_PATH.unlink()
+        if _workspace_runtime_snapshot() != _IMPORT_SNAPSHOT:
+            raise AssertionError("API tests changed workspace runtime files")
+
+    def test_admin_bootstrap_files_are_isolated_from_workspace(self):
+        from backend import managed_assets
+
+        for value in (main.settings.log_file, main.settings.initial_password_file, main.settings.voice_config_file):
+            self.assertTrue(Path(value).is_relative_to(_TEST_RUNTIME))
+        self.assertTrue(managed_assets.ASSET_DIR.is_relative_to(_TEST_RUNTIME))
+        with patch.object(main.settings, "require_admin_auth", False):
+            response = self.client.get("/admin/settings")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Path(main.settings.initial_password_file).is_file())
+        self.assertEqual(_workspace_runtime_snapshot(), _IMPORT_SNAPSHOT)
 
     def test_qr_key_route_requires_api_token_and_returns_session_fields(self):
         response = self.client.get("/qqmusic/login/qr/key")
@@ -174,6 +197,28 @@ class ApiRouteIntegrationTests(unittest.TestCase):
             self.assertEqual(websocket.accepted_subprotocol, "minerats-v1")
             websocket.send_text("ping")
             self.assertEqual(websocket.receive_text(), '{"type":"pong"}')
+
+@unittest.skipIf(main is None, f"backend runtime dependencies unavailable: {_IMPORT_ERROR}")
+class BackendShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_awaits_workers_and_releases_socket_voice_resources(self):
+        workers = [asyncio.create_task(asyncio.Event().wait()) for _ in range(3)]
+        with (
+            patch.object(main, "_chat_task", workers[0]),
+            patch.object(main, "_ws_position_task", workers[1]),
+            patch.object(main, "_ts_desc_task", workers[2]),
+            patch.object(main.ws_manager, "close", AsyncMock()) as close_sockets,
+            patch.object(main, "close_all_bilibili_qr_sessions", AsyncMock()) as close_qr,
+            patch.object(main.voice, "close", AsyncMock()) as close_voice,
+        ):
+            await main._shutdown()
+            self.assertTrue(all(task.done() for task in workers))
+            self.assertIsNone(main._chat_task)
+            self.assertIsNone(main._ws_position_task)
+            self.assertIsNone(main._ts_desc_task)
+        close_sockets.assert_awaited_once()
+        close_qr.assert_awaited_once()
+        close_voice.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

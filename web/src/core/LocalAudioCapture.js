@@ -25,6 +25,7 @@ export class LocalAudioCapture {
     this.stream = null;
     this.status = 'idle';
     this.message = '';
+    this._generation = 0;
   }
 
   get active() {
@@ -54,6 +55,7 @@ export class LocalAudioCapture {
 
   async start() {
     if (this.active) return this.snapshot();
+    if (this.status === 'requesting') throw new Error('系统音频授权正在进行中');
     if (!this.secureContext) {
       throw new Error('本地音频捕获需要通过 HTTPS 打开网页');
     }
@@ -64,11 +66,13 @@ export class LocalAudioCapture {
     // Start/resume Web Audio before the first await consumes the click's
     // transient user activation. The prepared context is reused after the
     // display chooser resolves.
+    const generation = ++this._generation;
     const preparePromise = this.analyzer.prepare?.();
     this._setStatus('requesting', '请选择屏幕并勾选“共享系统音频”');
     let stream;
     try {
       await preparePromise;
+      if (generation !== this._generation) return this.snapshot();
       stream = await this.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 1, max: 2 } },
         audio: {
@@ -82,9 +86,15 @@ export class LocalAudioCapture {
         systemAudio: 'include',
       });
     } catch (error) {
+      if (generation !== this._generation) return this.snapshot();
       const denied = error?.name === 'NotAllowedError' || error?.name === 'AbortError';
       this._setStatus('idle', denied ? '未授权系统音频' : '无法启动本地音频捕获');
       throw new Error(denied ? '未授权系统音频捕获' : (error?.message || '无法启动本地音频捕获'));
+    }
+
+    if (generation !== this._generation) {
+      stopTracks(stream);
+      return this.snapshot();
     }
 
     const audioTracks = stream.getAudioTracks();
@@ -103,11 +113,20 @@ export class LocalAudioCapture {
       this._setStatus('idle', '音频分析器连接失败');
       throw new Error('无法连接本地音频分析器');
     }
-    const running = await this.analyzer.resume();
-    if (running === false) {
+    this.stream = stream;
+    let running;
+    try { running = await this.analyzer.resume(); }
+    catch (error) {
+      if (generation === this._generation) this.stop('浏览器音频分析启动失败');
       stopTracks(stream);
-      this.analyzer.disconnect();
-      this._setStatus('idle', '浏览器暂停了音频分析，请点击按钮重新授权');
+      throw error;
+    }
+    if (generation !== this._generation) {
+      stopTracks(stream);
+      return this.snapshot();
+    }
+    if (running === false) {
+      this.stop('浏览器暂停了音频分析，请点击按钮重新授权');
       throw new Error('浏览器未允许音频分析运行，请点击按钮重新授权');
     }
 
@@ -123,6 +142,7 @@ export class LocalAudioCapture {
   }
 
   stop(message = '本地音频捕获已关闭', { forget = false } = {}) {
+    this._generation++;
     const stream = this.stream;
     this.stream = null;
     if (stream) stopTracks(stream);

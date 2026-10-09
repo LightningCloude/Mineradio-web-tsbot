@@ -4,6 +4,10 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
+from backend.tests.runtime_isolation import configure_test_runtime
+
+configure_test_runtime()
+
 from backend import crypto
 from backend.config import settings
 from backend.main import _path_requires_api_token

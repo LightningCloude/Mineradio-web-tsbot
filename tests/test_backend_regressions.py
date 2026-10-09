@@ -6,6 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from backend.tests.runtime_isolation import configure_test_runtime
+
+configure_test_runtime()
+
 from fastapi import HTTPException
 
 from backend import main

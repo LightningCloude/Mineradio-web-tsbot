@@ -3,12 +3,18 @@ import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 import { playlistManager } from '../shared/PlaylistManager.js';
+import { LatestRequest } from '../core/LatestRequest.js';
+
+const queueRequest = new LatestRequest();
 
 async function refreshQueue() {
+  const request = queueRequest.begin();
+  const revision = state.queueRevision;
   try {
-    const data = await api.getQueue();
+    const data = await api.getQueue({ signal: request.signal, silent: true });
+    if (!request.isCurrent()) return;
     const raw = data.items || data.queue || data || [];
-    state.updateQueue(raw.map(q => ({ ...q, artwork: q.artwork || q.cover_url || '' })));
+    state.updateQueue(raw.map(q => ({ ...q, artwork: q.artwork || q.cover_url || '' })), { expectedRevision: revision });
   } catch (e) { /* ignore */ }
 }
 
@@ -17,10 +23,17 @@ async function refreshQueue() {
  * Opens when searchOpen is toggled in state.ui.
  */
 export class SearchPanel {
-  constructor(container) {
+  constructor(container, { apiClient = api } = {}) {
     this.container = container;
+    this._api = apiClient;
+    this._searchRequest = new LatestRequest();
+    this._debounceTimer = null;
+    this._wasOpen = false;
     this._buildDOM();
-    eventBus.on('ui:changed', (ui) => {
+    this._unsubscribe = eventBus.on('ui:changed', (ui) => {
+      if (this._wasOpen === ui.searchOpen) return;
+      this._wasOpen = ui.searchOpen;
+      this._cancelSearch();
       this.container.style.display = ui.searchOpen ? 'flex' : 'none';
       if (ui.searchOpen) {
         const inp = this.container.querySelector('.search-input');
@@ -51,10 +64,13 @@ export class SearchPanel {
     });
 
     const input = this.container.querySelector('.search-input');
-    let debounceTimer;
     input.addEventListener('input', () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => this._doSearch(input.value.trim()), 300);
+      // Invalidate immediately, not only after debounce: a previous response may arrive meanwhile.
+      this._cancelSearch();
+      this._debounceTimer = setTimeout(() => {
+        this._debounceTimer = null;
+        this._doSearch(input.value.trim());
+      }, 300);
     });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') state.toggleUI('searchOpen');
@@ -62,6 +78,7 @@ export class SearchPanel {
   }
 
   async _doSearch(keyword) {
+    const request = this._searchRequest.begin();
     const resultsEl = this.container.querySelector('.search-results');
     if (!keyword) {
       resultsEl.innerHTML = '<div class="search-hint">输入关键词搜索</div>';
@@ -71,12 +88,14 @@ export class SearchPanel {
     resultsEl.innerHTML = '<div class="search-loading">搜索中...</div>';
 
     try {
-      const data = await api.search(keyword);
+      const data = await this._api.search(keyword, { signal: request.signal });
+      if (!request.isCurrent()) return;
       const songs = data.items || data.songs || data.results || [];
 
       if (!songs.length) {
         // Check if cookie expired
-        const cookieOk = await this._checkQQCookie();
+        const cookieOk = await this._checkQQCookie(request.signal);
+        if (!request.isCurrent()) return;
         if (!cookieOk) {
           resultsEl.innerHTML = '<div class="search-error">QQ 音乐登录已过期<br/><button class="sri-relogin">重新登录</button></div>';
           resultsEl.querySelector('.sri-relogin')?.addEventListener('click', () => {
@@ -143,6 +162,7 @@ export class SearchPanel {
         });
       });
     } catch (e) {
+      if (!request.isCurrent()) return;
       resultsEl.innerHTML = '<div class="search-error">搜索失败</div>';
     }
   }
@@ -190,13 +210,23 @@ export class SearchPanel {
     });
   }
 
-  async _checkQQCookie() {
+  async _checkQQCookie(signal) {
     try {
-      const res = await fetch('/api/admin/qqmusic/status');
-      const json = await res.json();
+      const json = await this._api.getQQCookieStatus({ signal, silent: true });
       return !!(json.admin_cookie_set || json.cookie_set);
     } catch (e) {
       return false;
     }
+  }
+
+  _cancelSearch() {
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = null;
+    this._searchRequest.cancel();
+  }
+
+  dispose() {
+    this._cancelSearch();
+    this._unsubscribe?.();
   }
 }

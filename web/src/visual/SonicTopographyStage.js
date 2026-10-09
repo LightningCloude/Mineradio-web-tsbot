@@ -771,6 +771,11 @@ export class SonicTopographyStage {
     this._amplitude = 1.2;
     this._brightness = 1;
     this._rotationScale = 1;
+    this._poolMatrix = new THREE.Matrix4();
+    this._poolTrailMatrix = new THREE.Matrix4();
+    this._poolPosition = new THREE.Vector3();
+    this._poolScale = new THREE.Vector3();
+    this._poolQuaternion = new THREE.Quaternion();
     this._buildTerrain();
     this._buildBoundaryMist();
     this._buildFloatingBlocks();
@@ -1168,10 +1173,10 @@ export class SonicTopographyStage {
   }
 
   _updateFloatingBlocks(elapsed, energy) {
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
+    const matrix = this._poolMatrix;
+    const position = this._poolPosition;
+    const scale = this._poolScale;
+    const quaternion = this._poolQuaternion;
     for (let i = 0; i < FLOATING_BLOCK_MAX; i++) {
       const seed = i + 1;
       const radius = 12 + hash01(seed) * 43;
@@ -1190,11 +1195,11 @@ export class SonicTopographyStage {
   }
 
   _updateFallingDrops(dt) {
-    const matrix = new THREE.Matrix4();
-    const trailMatrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
+    const matrix = this._poolMatrix;
+    const trailMatrix = this._poolTrailMatrix;
+    const position = this._poolPosition;
+    const scale = this._poolScale;
+    const quaternion = this._poolQuaternion;
     for (let i = 0; i < FALLING_DROP_MAX; i++) {
       const drop = this._drops[i];
       if (!drop.active) {

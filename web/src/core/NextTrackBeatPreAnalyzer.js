@@ -1,3 +1,5 @@
+// RETIRED: historical pre-analysis module; not assembled by the production app.
+// Runtime uses local system audio or an existing browser cache, never downloads.
 import { resolveSongAnalysisSource } from './SongAudioSource.js';
 import { localBeatAnalysisCache } from './LocalBeatAnalysisCache.js';
 

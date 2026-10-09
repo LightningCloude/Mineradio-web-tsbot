@@ -32,7 +32,9 @@ test('sparse WebSocket songs inherit the matching stream URL only', () => {
 
 test('playback uses local capture or cached analysis without full-track proxy downloads', async () => {
   const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-  assert.match(main, /source_url: status\.now_playing_source_url/);
+  const bootstrap = await readFile(new URL('../src/core/PlaybackBootstrap.js', import.meta.url), 'utf8');
+  assert.match(main, /bootstrapPlayback\(\{ apiClient: api, stateManager: state, bus: eventBus \}\)/);
+  assert.match(bootstrap, /source_url: status\.now_playing_source_url/);
   assert.match(main, /await localBeatAnalysisCache\.get\(song\)/);
   assert.match(main, /localAudioCapture\.active/);
   assert.match(main, /local-audio:capture-changed/);

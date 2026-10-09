@@ -1,6 +1,7 @@
 import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { SonicTopographyStage } from './SonicTopographyStage.js';
+import { VisualPerformance } from './VisualPerformance.js';
 import {
   clampRippleOrigin,
   selectRippleSlots,
@@ -272,6 +273,10 @@ export class ParticleStage {
     this._uniforms = null;
     this._lastFPSCheck = 0;
     this._fps = 60;
+    this._performance = new VisualPerformance({ deviceRatio: window.devicePixelRatio });
+    this._renderAccumulator = 0;
+    this._contextLost = false;
+    this._hidden = Boolean(document.hidden);
     this._coverUrl = null;
     this._coverLoadToken = 0;
     this._coverFadeId = null;
@@ -307,7 +312,7 @@ export class ParticleStage {
 
   _init() {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, alpha: true, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this._performance.pixelRatio);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(0x000000, 1);
 
@@ -323,8 +328,9 @@ export class ParticleStage {
     this._buildParticles();
 
     this._onWindowResize = () => this._onResize();
-    this._onUserIdle = () => this._setPixelRatio(Math.min(window.devicePixelRatio * 0.5, 1));
-    this._onUserActive = () => this._setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this._onUserIdle = () => { this._performance.idle = true; this._setPixelRatio(this._performance.pixelRatio); };
+    this._onUserActive = () => { this._performance.idle = false; this._setPixelRatio(this._performance.pixelRatio); };
+    this._bindRenderingLifecycle();
     window.addEventListener('resize', this._onWindowResize);
     this._disposers.push(eventBus.on('visual:beat', (beat) => this._onBeat(beat)));
     this._disposers.push(eventBus.on('playback:started', () => this._onStarted()));
@@ -487,17 +493,50 @@ export class ParticleStage {
 
   onFrame(fn) { this._frameCallback = fn; }
 
-  start() { this._clock.start(); this._animate(); }
+  _bindRenderingLifecycle() {
+    this._onVisibilityChange = () => {
+      this._hidden = Boolean(document.hidden);
+      this._clock.getDelta();
+      this._renderAccumulator = 0;
+      this._performance.reset();
+    };
+    this._onContextLost = (event) => {
+      event.preventDefault();
+      this._contextLost = true;
+      eventBus.emit('toast', { message: '图形上下文暂时中断，等待浏览器恢复', level: 'info' });
+    };
+    this._onContextRestored = () => {
+      this._contextLost = false;
+      this._clock.getDelta();
+      this._renderAccumulator = 0;
+      this._performance.reset();
+      this._onResize();
+    };
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
+    this.canvas.addEventListener('webglcontextlost', this._onContextLost);
+    this.canvas.addEventListener('webglcontextrestored', this._onContextRestored);
+  }
+
+  start() { if (this._frameId != null) return; this._clock.start(); this._animate(); }
 
   _animate() {
     this._frameId = requestAnimationFrame(() => this._animate());
-    const dt = Math.min(this._clock.getDelta(), 0.1);
+    if (this._hidden || this._contextLost) return;
+    const frameDt = this._clock.getDelta();
+    this._renderAccumulator += frameDt;
+    if (this._performance.mode === 'saving' && this._renderAccumulator < 1 / 30) return;
+    const metrics = this._performance.observe(this._renderAccumulator);
+    if (metrics) {
+      this._fps = metrics.fps;
+      if (Math.abs(this.renderer.getPixelRatio() - metrics.pixelRatio) > 0.01) {
+        this._setPixelRatio(metrics.pixelRatio);
+      }
+      eventBus.emit('visual:performance', metrics);
+    }
+    const dt = Math.min(this._renderAccumulator, 0.1);
+    this._renderAccumulator = 0;
     const elapsed = this._clock.elapsedTime;
 
-    if (elapsed - this._lastFPSCheck > 2) {
-      this._fps = Math.round(1 / Math.max(dt, 0.001));
-      this._lastFPSCheck = elapsed;
-    }
     if (this._frameCallback) this._frameCallback(dt);
 
     // ── Slow decays (Mineradio-style: smooth, never jarring) ──
@@ -900,6 +939,14 @@ export class ParticleStage {
     this._sonicStage?.setRotationScale(value);
   }
 
+  setPerformanceMode(mode) {
+    this._performance.setMode(mode);
+    this._renderAccumulator = 0;
+    this._setPixelRatio(this._performance.pixelRatio);
+  }
+
+  getPerformanceMode() { return this._performance.mode; }
+
   /** Switch visual preset: 0=粒子墙, 1=星河, 2=音域回响. */
   setPreset(index) {
     const idx = Math.max(0, Math.min(2, index | 0));
@@ -975,6 +1022,10 @@ export class ParticleStage {
 
   destroy() {
     cancelAnimationFrame(this._frameId);
+    this._frameId = null;
+    document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    this.canvas.removeEventListener('webglcontextlost', this._onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
     if (this._coverFadeId != null) cancelAnimationFrame(this._coverFadeId);
     window.removeEventListener('resize', this._onWindowResize);
     this.canvas.removeEventListener('mousedown', this._onDragStart);

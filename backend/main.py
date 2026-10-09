@@ -69,6 +69,18 @@ from .config import settings
 from .logger import logger
 from .lyric_translation import align_native_translations
 from .ws_manager import ws_manager
+from .public_routes import (
+    router as public_router, create_readiness_router, public_config, managed_asset_file,
+)
+from .request_auth import (
+    normalize_request_path as _normalize_request_path,
+    get_request_api_token as _get_request_api_token,
+    get_websocket_api_token as _get_websocket_api_token,
+    websocket_subprotocol as _websocket_subprotocol,
+    path_requires_api_token as _path_requires_api_token,
+    check_api_token as _check_api_token,
+    api_token_middleware as _request_api_token_middleware,
+)
 
 app = FastAPI(title="tsbot-backend")
 
@@ -84,6 +96,8 @@ app.add_middleware(
 netease = NeteaseClient()
 qqmusic = QQMusicClient()
 voice = VoiceClient()
+app.include_router(public_router)
+app.include_router(create_readiness_router(voice))
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BILIBILI_AUDIO_DIR = REPO_ROOT / "tmp" / "bilibili_audio"
@@ -132,11 +146,6 @@ async def options_handler():
     return {"message": "OK"}
 
 
-def _normalize_request_path(path: str) -> str:
-    normalized = (path or "/").rstrip("/")
-    return normalized or "/"
-
-
 def _split_env_multiline(value: str | None) -> list[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -144,75 +153,14 @@ def _split_env_multiline(value: str | None) -> list[str]:
     return [line.strip() for line in raw.replace("\\n", "\n").splitlines() if line.strip()]
 
 
-def _get_request_api_token(request: Request) -> str:
-    auth = (request.headers.get("authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-    return (request.headers.get("x-api-token") or "").strip()
-
-
-def _get_websocket_api_token(websocket: WebSocket) -> str:
-    auth = (websocket.headers.get("authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-
-    header_token = (websocket.headers.get("x-api-token") or "").strip()
-    if header_token:
-        return header_token
-
-    return extract_websocket_protocol_token(
-        websocket.headers.get("sec-websocket-protocol")
-    )
-
-
-def _websocket_subprotocol(websocket: WebSocket) -> str | None:
-    protocols = {
-        part.strip()
-        for part in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if part.strip()
-    }
-    return WEBSOCKET_PROTOCOL if WEBSOCKET_PROTOCOL in protocols else None
-
-
-def _path_requires_api_token(path: str) -> bool:
-    if not settings.require_api_auth and not settings.get_api_tokens():
-        return False
-
-    normalized = _normalize_request_path(path)
-    if normalized in {"/", "/docs", "/redoc", "/openapi.json", "/config/public"}:
-        return False
-    if normalized.startswith(("/docs/", "/redoc/", "/auth/", "/admin/", "/assets/", "/cover/")):
-        return False
-    return normalized != "/admin"
-
-
-def _check_api_token(request: Request) -> str | None:
-    tokens = settings.get_api_tokens()
-    if not tokens:
-        return "api token authentication is required but no token is configured"
-
-    provided = _get_request_api_token(request)
-    if not provided:
-        return "missing api token"
-    if any(hmac.compare_digest(provided, token) for token in tokens):
-        return None
-    return "invalid api token"
-
-
 @app.middleware("http")
 async def api_token_middleware(request: Request, call_next):
-    if request.method == "OPTIONS" or not _path_requires_api_token(request.url.path):
-        return await call_next(request)
-
-    error = _check_api_token(request)
-    if error is not None:
-        status_code = 503 if "no token is configured" in error else 401
-        return JSONResponse(
-            status_code=status_code,
-            content={"detail": error},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return await call_next(request)
+    # Keep existing helper monkeypatch points while delegating request policy.
+    return await _request_api_token_middleware(
+        request, call_next,
+        path_requires=_path_requires_api_token,
+        token_check=_check_api_token,
+    )
 
 _chat_task: asyncio.Task[None] | None = None
 _current_queue_item_id: int | None = None
@@ -404,10 +352,14 @@ async def _startup() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    global _chat_task
-    if _chat_task is not None:
-        _chat_task.cancel()
-        _chat_task = None
+    global _chat_task, _ws_position_task, _ts_desc_task
+    tasks = [task for task in (_chat_task, _ws_position_task, _ts_desc_task) if task is not None]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _chat_task = _ws_position_task = _ts_desc_task = None
+    await ws_manager.close()
     await close_all_bilibili_qr_sessions()
     await voice.close()
 
@@ -4321,28 +4273,6 @@ def _set_secret(session: Session, key: str, plaintext: str) -> None:
     session.commit()
 
 
-@app.get("/config/public")
-def public_config() -> dict:
-    icon = ASSET_BY_KEY["web-app-icon"]
-    return {
-        "app_name": settings.web_app_name,
-        "app_icon": icon.public_path if asset_path(icon).is_file() else "",
-        "log_level": settings.web_log_level,
-    }
-
-
-@app.get("/assets/{asset_key}")
-def managed_asset_file(asset_key: str) -> FileResponse:
-    asset = ASSET_BY_KEY.get(asset_key)
-    if asset is None or not asset.public_path:
-        raise HTTPException(status_code=404, detail="未知图片资源")
-    path = asset_path(asset)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="尚未上传图片")
-    media_type = detect_image_type(path.read_bytes()) or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-cache"})
-
-
 @app.get("/auth/status")
 def auth_status(request: Request, session: Session = Depends(get_session)) -> dict:
     credential = session.get(AdminCredential, 1)
@@ -5071,7 +5001,7 @@ async def ws_status(websocket: WebSocket) -> None:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
-                await websocket.send_text('{"type":"pong"}')
+                await ws_manager.send_text(websocket, '{"type":"pong"}')
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
     except Exception:

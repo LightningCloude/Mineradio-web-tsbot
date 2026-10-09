@@ -94,6 +94,7 @@ export class AudioAnalyzer {
       this._bands[name] = { fast: 0, slow: 0, peak: 0, prev: 0 };
     }
     this._prevRms = 0;
+    this._signalAt = -Infinity;
 
     this._visualBands = {};
     for (const name of Object.keys(VISUAL_BANDS)) {
@@ -332,6 +333,7 @@ export class AudioAnalyzer {
       rms += tv * tv;
     }
     rms = Math.sqrt(rms / this._timeData.length);
+    this._signalAt = performance.now();
 
     // ── Fast/slow followers (matching Mineradio time constants) ──
     const bs = this._bands;
@@ -612,6 +614,16 @@ export class AudioAnalyzer {
     }
     if (performance.now() - this._visualFrameAt > maxAgeMs) return null;
     return this._visualFrame;
+  }
+
+  /** Raw, recent signal level; connection alone does not prove sound exists. */
+  getInputStatus(maxAgeMs = 750) {
+    const live = this._connected && this._hasLiveInput();
+    const recent = performance.now() - this._signalAt <= maxAgeMs;
+    return Object.freeze({
+      live: Boolean(live), running: this._ctx?.state === 'running',
+      rms: live && recent ? Math.max(0, Math.min(1, this._prevRms)) : 0,
+    });
   }
 
   /**

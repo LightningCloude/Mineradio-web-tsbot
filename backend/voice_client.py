@@ -31,6 +31,12 @@ class VoiceAudioFx:
 
 
 class VoiceClient:
+    # Unary operations must not indefinitely block HTTP routes or position pushes.
+    STATUS_TIMEOUT = 3.0
+    COMMAND_TIMEOUT = 10.0
+    # Renew a healthy subscription periodically via the existing worker reconnect.
+    EVENT_STREAM_TIMEOUT = 3600.0
+
     def __init__(self) -> None:
         self._channel: grpc.aio.Channel | None = None
         self._stub = None
@@ -65,62 +71,63 @@ class VoiceClient:
     async def ping(self) -> str:
         stub = self._get_stub()
         assert self._pb2 is not None
-        resp = await stub.Ping(self._pb2.Empty())
+        resp = await stub.Ping(self._pb2.Empty(), timeout=self.STATUS_TIMEOUT)
         return resp.version
 
     async def play(self, source_url: str, title: str, requested_by: str, notice: str = "") -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
         await stub.Play(
-            self._pb2.PlayRequest(source_url=source_url, title=title, requested_by=requested_by, notice=notice)
+            self._pb2.PlayRequest(source_url=source_url, title=title, requested_by=requested_by, notice=notice),
+            timeout=self.COMMAND_TIMEOUT,
         )
 
     async def pause(self) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.Pause(self._pb2.Empty())
+        await stub.Pause(self._pb2.Empty(), timeout=self.COMMAND_TIMEOUT)
 
     async def resume(self) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.Resume(self._pb2.Empty())
+        await stub.Resume(self._pb2.Empty(), timeout=self.COMMAND_TIMEOUT)
 
     async def seek(self, time_seconds: float) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        resp = await stub.Seek(self._pb2.SeekRequest(time=float(time_seconds)))
+        resp = await stub.Seek(self._pb2.SeekRequest(time=float(time_seconds)), timeout=self.COMMAND_TIMEOUT)
         if not bool(getattr(resp, "ok", False)):
             raise RuntimeError(str(getattr(resp, "message", "") or "seek failed"))
 
     async def stop(self) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.Stop(self._pb2.Empty())
+        await stub.Stop(self._pb2.Empty(), timeout=self.COMMAND_TIMEOUT)
 
     async def skip(self) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.Skip(self._pb2.Empty())
+        await stub.Skip(self._pb2.Empty(), timeout=self.COMMAND_TIMEOUT)
 
     async def send_notice(self, message: str, *, target_mode: int = 2) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.SendNotice(self._pb2.NoticeRequest(message=message, target_mode=int(target_mode)))
+        await stub.SendNotice(self._pb2.NoticeRequest(message=message, target_mode=int(target_mode)), timeout=self.COMMAND_TIMEOUT)
 
     async def set_client_description(self, description: str) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.SetClientDescription(self._pb2.SetClientDescriptionRequest(description=description))
+        await stub.SetClientDescription(self._pb2.SetClientDescriptionRequest(description=description), timeout=self.COMMAND_TIMEOUT)
 
     async def set_volume(self, volume_percent: int) -> None:
         stub = self._get_stub()
         assert self._pb2 is not None
-        await stub.SetVolume(self._pb2.SetVolumeRequest(volume_percent=volume_percent))
+        await stub.SetVolume(self._pb2.SetVolumeRequest(volume_percent=volume_percent), timeout=self.COMMAND_TIMEOUT)
 
     async def get_status(self) -> VoiceStatus:
         stub = self._get_stub()
         assert self._pb2 is not None
-        resp = await stub.GetStatus(self._pb2.Empty())
+        resp = await stub.GetStatus(self._pb2.Empty(), timeout=self.STATUS_TIMEOUT)
         return VoiceStatus(
             state=resp.State.Name(resp.state),
             now_playing_title=resp.now_playing_title,
@@ -151,12 +158,12 @@ class VoiceClient:
             req.bass_db = float(bass_db)
         if reverb_mix is not None:
             req.reverb_mix = float(reverb_mix)
-        await stub.SetAudioFx(req)
+        await stub.SetAudioFx(req, timeout=self.COMMAND_TIMEOUT)
 
     async def get_audio_fx(self) -> VoiceAudioFx:
         stub = self._get_stub()
         assert self._pb2 is not None
-        resp = await stub.GetAudioFx(self._pb2.Empty())
+        resp = await stub.GetAudioFx(self._pb2.Empty(), timeout=self.STATUS_TIMEOUT)
         return VoiceAudioFx(
             pan=float(getattr(resp, "pan", 0.0) or 0.0),
             width=float(getattr(resp, "width", 1.0) or 1.0),
@@ -179,5 +186,10 @@ class VoiceClient:
             include_playback=include_playback,
             include_log=include_log,
         )
-        async for ev in stub.SubscribeEvents(req):
-            yield ev
+        call = stub.SubscribeEvents(req, timeout=self.EVENT_STREAM_TIMEOUT)
+        try:
+            async for ev in call:
+                yield ev
+        finally:
+            # Do not leave a live gRPC stream after shutdown or cancellation.
+            call.cancel()

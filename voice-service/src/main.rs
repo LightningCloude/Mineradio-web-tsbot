@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 use audiopus::coder::Encoder;
 use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio_stream::wrappers::{BroadcastStream, TcpListenerStream};
@@ -21,6 +21,7 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 
 mod logger;
+mod pcm_buffer;
 
 use tsclientlib::{Connection, DisconnectOptions, Identity, StreamItem, Version};
 use tsproto_packets::packets::{AudioData, CodecType, Direction, Flags, OutAudio, OutCommand, OutPacket, PacketType};
@@ -1609,15 +1610,16 @@ async fn playback_loop(
                 break;
             }
             let t0 = Instant::now();
-            if stdout.read_exact(&mut buf).await.is_err() {
+            if !pcm_buffer::read_frame(&mut stdout, &mut buf, &reader_cancel).await {
                 break;
             }
             let dt = t0.elapsed();
             if dt >= Duration::from_millis(200) {
                 warn!(source_url = %reader_src, read_ms = %dt.as_millis(), "ffmpeg pcm read stalled");
             }
-            if pcm_tx.send(buf.clone()).await.is_err() {
-                break;
+            tokio::select! {
+                _ = reader_cancel.cancelled() => { break; }
+                result = pcm_tx.send(buf.clone()) => { if result.is_err() { break; } }
             }
         }
     });
@@ -1677,14 +1679,8 @@ async fn playback_loop(
             _ = ticker.tick() => {}
         }
 
-        while pcm_buf.len() < pcm_buffer_limit {
-            let Ok(frame) = pcm_rx.try_recv() else {
-                break;
-            };
-            if frame.len() == frame_bytes {
-                pcm_buf.push_back(frame);
-            }
-        }
+        pcm_buffer::drain_bounded(&mut pcm_rx, &mut pcm_buf, pcm_buffer_limit, frame_bytes);
+        if pcm_rx.is_closed() && pcm_rx.is_empty() && pcm_buf.is_empty() { break; }
 
         if !logged_first_pcm {
             if !pcm_buf.is_empty() {
@@ -1696,7 +1692,7 @@ async fn playback_loop(
         }
 
         if prebuffering {
-            prebuffering = pcm_buf.len() < prebuffer_target;
+            prebuffering = !pcm_buffer::ready(pcm_buf.len(), prebuffer_target, pcm_rx.is_closed());
         }
 
         let now = Instant::now();
@@ -1925,6 +1921,16 @@ async fn playback_loop(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if env::args().nth(1).as_deref() == Some("--healthcheck") {
+        let addr = env::args().nth(2).unwrap_or_else(|| "127.0.0.1:50051".to_string());
+        let endpoint = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))?
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(2));
+        let channel = endpoint.connect().await?;
+        let mut client = voicev1::voice_service_client::VoiceServiceClient::new(channel);
+        client.ping(voicev1::Empty {}).await?;
+        return Ok(());
+    }
     let initial_config = load_voice_config();
     logger::init_logger();
 

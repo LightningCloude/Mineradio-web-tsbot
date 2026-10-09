@@ -5,7 +5,7 @@ import { eventBus } from './EventBus.js';
  * Modules read state via getters and mutate it via dedicated update methods.
  * Every mutation emits an event so reactive modules can respond.
  */
-class StateManager {
+export class StateManager {
   constructor() {
     // ── Position interpolation (WS currently sends every ~1s, too coarse for karaoke) ──
     this._posBase = 0;       // last WS position
@@ -45,6 +45,7 @@ class StateManager {
 
     this._idleTimer = null;
     this._wasIdle = false;
+    this._queueRevision = 0;
     this._startIdleTracking();
   }
 
@@ -82,9 +83,12 @@ class StateManager {
 
   /** Queue */
 
-  updateQueue(queue) {
+  updateQueue(queue, { expectedRevision } = {}) {
+    if (expectedRevision !== undefined && expectedRevision !== this._queueRevision) return false;
+    this._queueRevision += 1;
     this.state.queue = queue;
     eventBus.emit('queue:changed', this.state.queue);
+    return true;
   }
 
   /** Lyrics */
@@ -124,7 +128,8 @@ class StateManager {
   updateConnection(data) {
     const prev = this.state.connection;
     this.state.connection = { ...this.state.connection, ...data };
-    if (prev.wsConnected !== this.state.connection.wsConnected) {
+    if (prev.wsConnected !== this.state.connection.wsConnected
+      || prev.apiReachable !== this.state.connection.apiReachable) {
       eventBus.emit('connection:changed', this.state.connection);
     }
   }
@@ -167,6 +172,7 @@ class StateManager {
 
   get playback() { return this.state.playback; }
   get queue() { return this.state.queue; }
+  get queueRevision() { return this._queueRevision; }
   get lyrics() { return this.state.lyrics; }
   get connection() { return this.state.connection; }
   get ui() { return this.state.ui; }

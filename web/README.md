@@ -1,6 +1,6 @@
 # MineraTS Web 前端
 
-当前前端是 Vite 5 构建的原生 JavaScript 单页应用，使用 Three.js 和
+当前前端是 Vite 8 构建的原生 JavaScript 单页应用，使用 Three.js 和
 GSAP，不使用 Vue、TypeScript、Tailwind 或前端路由框架。
 
 ## 开发命令
@@ -20,7 +20,6 @@ npm run preview
 ```text
 web/
 ├── index.html
-├── public/vendor/          # 固定版本的浏览器依赖
 ├── src/
 │   ├── main.js             # 组装模块和渲染循环
 │   ├── style.css
@@ -58,9 +57,21 @@ web/
 根据 `TSBOT_HOST` 和 `TSBOT_PORT` 推导。`VITE_API_BASE` 推荐保持
 `/api`。
 
-若后端启用 API Token，构建时设置相同的 `VITE_API_TOKEN`。前端构建
-变量会进入静态产物，不能把它当作高强度的服务端秘密；生产环境仍应
-配合网络边界和管理员接口独立鉴权。
+若后端启用 API Token，网页通过浏览器本地存储 `tsbot_api_token` 读取令牌；
+管理员兼容令牌使用 `tsbot_admin_token`。当前生产请求不读取 `VITE_API_TOKEN`。
+不应将真实令牌写入构建产物。可信私有部署的免令牌模式见维护手册，
+不得将关闭鉴权的管理入口直接暴露给不可信网络。
+
+## 音频来源与性能
+
+- `LocalAudioCapture`：HTTPS 上经用户授权共享系统音频，零增益输出避免音频重播。
+- `AudioSignalMonitor`：最多每秒四次更新实际输入电平和来源，持续无声时提示检查 TeamSpeak 输出扬声器。
+- `LocalBeatAnalysisCache`：仅读取本浏览器已有缓存；未命中时使用低潮模拟。
+- `OfflineBeatAnalyzer` 和 `NextTrackBeatPreAnalyzer`：历史兼容模块，**未接入 main.js，不会运行或请求下载**。
+- `VisualPerformance`：默认高画质保留原参数；自动档通过长期帧率滞回调整 DPR，省电档 30 FPS。三档都不改柱体数量。
+- `ParticleStage`：后台暂停绘制；WebGL 上下文丢失时停止提交，恢复后复用场景资源。
+
+Three.js 与 GSAP 由 npm 锁文件解析，不再附带未使用的旧版 public/vendor 副本。
 
 ## 动态壁纸
 

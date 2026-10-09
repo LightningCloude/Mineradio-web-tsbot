@@ -1,5 +1,6 @@
 import { state } from '../shared/StateManager.js';
 import { eventBus } from '../shared/EventBus.js';
+import { describeAudioSignal } from '../core/AudioSignalMonitor.js';
 import { lyricColorManager, LYRIC_COLOR_PRESETS } from '../shared/LyricColorManager.js';
 import { lyricEffectsManager } from '../shared/LyricEffectsManager.js';
 import {
@@ -39,6 +40,7 @@ export class VisualSettings {
     eventBus.on('local-audio:capture-changed', (snapshot) => {
       this._refreshLocalAudioCapture(snapshot);
     });
+    eventBus.on('audio:diagnostics', (snapshot) => this._refreshAudioDiagnostics(snapshot));
     this._restorePreset();
   }
 
@@ -81,6 +83,8 @@ export class VisualSettings {
             <span class="vis-local-audio-indicator" id="local-audio-indicator"></span>
           </div>
           <div class="vis-local-audio-status" id="local-audio-capture-status" aria-live="polite"></div>
+          <div class="vis-local-audio-status" id="audio-source-status" aria-live="polite"></div>
+          <meter id="audio-input-level" min="0" max="1" value="0" aria-label="系统音频输入电平"></meter>
           <div class="vis-local-audio-help">
             选择整个屏幕并勾选“共享系统音频”。启用后直接分析本机听到的 TeamSpeak 音频，不再下载歌曲进行分析。
           </div>
@@ -99,6 +103,13 @@ export class VisualSettings {
           <div class="vis-bg-name" id="bg-video-name" aria-live="polite">正在读取本地壁纸…</div>
 
           <!-- ── Visual presets ── -->
+          <div class="vis-section-label">渲染性能</div>
+          <select id="visual-performance-mode" class="vis-bg-btn" aria-label="渲染性能模式">
+            <option value="high">高画质（保持当前效果）</option>
+            <option value="auto">自动（按持续帧率调节分辨率）</option>
+            <option value="saving">省电（低分辨率 / 30 FPS）</option>
+          </select>
+          <div class="vis-local-audio-status" id="visual-performance-status"></div>
           <div class="vis-section-label">视觉预设</div>
           <div class="preset-selector" id="preset-selector">
             <button type="button" class="preset-btn active" data-preset="0">粒子墙</button>
@@ -153,6 +164,13 @@ export class VisualSettings {
       }
     });
     this._refreshLocalAudioCapture();
+    const performanceMode = this.container.querySelector('#visual-performance-mode');
+    performanceMode.value = this._stage.getPerformanceMode();
+    performanceMode.addEventListener('change', () => this._stage.setPerformanceMode(performanceMode.value));
+    eventBus.on('visual:performance', ({ fps, pixelRatio }) => {
+      const label = this.container.querySelector('#visual-performance-status');
+      if (label) label.textContent = `${fps} FPS · 渲染像素比 ${pixelRatio.toFixed(2)} · 地形密度不变`;
+    });
 
     // ── sliders → ParticleStage ──
     this.container.querySelectorAll('.vis-slider').forEach(slider => {
@@ -458,11 +476,21 @@ export class VisualSettings {
     indicator.classList.toggle('active', Boolean(info.active));
     indicator.classList.toggle('requesting', requesting);
 
-    if (info.active) status.textContent = '已连接：正在分析本机系统音频';
+    if (info.active) status.textContent = '系统音频已连接；输入电平与实际来源见下方';
     else if (!info.secureContext) status.textContent = '需要使用 HTTPS 打开网页后才能授权系统音频';
     else if (!info.supported) status.textContent = '当前浏览器不支持，请使用最新版 Chrome 或 Edge';
     else if (info.preferred && !info.message) status.textContent = '上次已启用，请点击按钮重新授权';
     else status.textContent = info.message || '未启用；当前使用本地缓存或低潮模拟节拍';
+  }
+
+  _refreshAudioDiagnostics(info) {
+    const label = this.container.querySelector('#audio-source-status');
+    const meter = this.container.querySelector('#audio-input-level');
+    const indicator = this.container.querySelector('#local-audio-indicator');
+    const text = describeAudioSignal(info);
+    if (label && label.textContent !== text) label.textContent = text;
+    if (meter) meter.value = info.captureActive ? Math.min(1, info.level * 4) : 0;
+    indicator?.classList.toggle('silent', Boolean(info.silent));
   }
 
   _refreshPresetButtons(activeIdx) {

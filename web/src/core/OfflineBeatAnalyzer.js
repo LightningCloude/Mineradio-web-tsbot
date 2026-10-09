@@ -1,4 +1,6 @@
 /**
+ * RETIRED: retained for historical tests/compatibility, not imported by main.js.
+ * Do not re-enable network song downloads for visualization analysis.
  * OfflineBeatAnalyzer — prefetch audio, decode with Web Audio API, run onset
  * detection, and return beat grids for the current playback controller.
  *

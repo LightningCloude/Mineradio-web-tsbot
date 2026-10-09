@@ -85,5 +85,5 @@ def reconfigure_logger(level: str, log_file: str) -> None:
 # 全局 logger 实例
 logger = setup_logger(
     level=getattr(settings, 'log_level', 'INFO'),
-    log_file="logs/backend.log"
+    log_file=getattr(settings, 'log_file', 'logs/backend.log')
 )
