@@ -149,6 +149,55 @@ class BrowserSmokePolicyTests(unittest.TestCase):
         self.assertIn("'line2", script)
         self.assertNotIn("line1\n", script)
 
+    def test_paused_and_empty_queue_diagnostics_are_valid_idle_sources(self):
+        self.assertEqual(browser_smoke.validate_audio_source_observation({
+            "label": "音频响应：空闲", "level": 0, "capture_active": False, "playing": False,
+        }), "idle")
+
+    def test_playing_fixture_still_requires_a_nonrealtime_active_source(self):
+        self.assertEqual(browser_smoke.validate_audio_source_observation({
+            "label": "音频响应：低潮模拟（非实时频谱）", "level": 0,
+            "capture_active": False, "playing": True,
+        }), "synthetic")
+        with self.assertRaisesRegex(browser_smoke.SmokeFailure, "playback state"):
+            browser_smoke.validate_audio_source_observation({
+                "label": "音频响应：空闲", "level": 0, "capture_active": False, "playing": True,
+            })
+
+    def test_a_local_cache_is_valid_without_live_audio_capture(self):
+        self.assertEqual(browser_smoke.validate_audio_source_observation({
+            "label": "音频响应：浏览器本地节拍缓存", "level": "0",
+            "capture_active": False, "playing": True,
+        }), "analyzed")
+
+    def test_absent_capture_rejects_nonzero_invalid_and_missing_levels(self):
+        for level in (0.001, -0.1, float("nan"), float("inf"), None, "not-a-number"):
+            with self.subTest(level=level), self.assertRaises(browser_smoke.SmokeFailure):
+                browser_smoke.validate_audio_source_observation({
+                    "label": "音频响应：空闲", "level": level,
+                    "capture_active": False, "playing": False,
+                })
+        with self.assertRaisesRegex(browser_smoke.SmokeFailure, "missing"):
+            browser_smoke.validate_audio_source_observation({"label": "音频响应：空闲", "playing": False})
+
+    def test_readonly_context_does_not_accept_live_capture_or_unrecognized_source_labels(self):
+        for label in ("实时系统音频：已检测到声音", "音频响应：等待输入", "", "unknown"):
+            with self.subTest(label=label), self.assertRaisesRegex(browser_smoke.SmokeFailure, "unexpected source"):
+                browser_smoke.validate_audio_source_observation({
+                    "label": label, "level": 0, "capture_active": False, "playing": False,
+                })
+        with self.assertRaisesRegex(browser_smoke.SmokeFailure, "enabled audio capture"):
+            browser_smoke.validate_audio_source_observation({
+                "label": "音频响应：空闲", "level": 0, "capture_active": True, "playing": False,
+            })
+
+    def test_inactive_playback_cannot_be_mislabeled_as_an_active_fallback(self):
+        with self.assertRaisesRegex(browser_smoke.SmokeFailure, "playback state"):
+            browser_smoke.validate_audio_source_observation({
+                "label": "音频响应：低潮模拟（非实时频谱）", "level": 0,
+                "capture_active": False, "playing": False,
+            })
+
 
 if __name__ == "__main__":
     unittest.main()

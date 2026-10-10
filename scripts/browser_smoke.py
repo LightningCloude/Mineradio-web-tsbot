@@ -11,6 +11,7 @@ import argparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -183,6 +184,34 @@ def check_control_accessibility(page, timeout_ms: int) -> str:
     return "all 10 existing controls fit inside the viewport"
 
 
+def validate_audio_source_observation(observation: dict[str, Any]) -> str:
+    """Validate passive source diagnostics without changing remote playback.
+
+    CI's playing fixture still requires a non-live source; a paused or empty
+    production queue correctly reports idle instead of an invented beat source.
+    """
+    label = str(observation.get("label") or "")
+    labels = {
+        "音频响应：空闲": "idle",
+        "音频响应：低潮模拟（非实时频谱）": "synthetic",
+        "音频响应：浏览器本地节拍缓存": "analyzed",
+    }
+    source = labels.get(label)
+    if source is None:
+        raise SmokeFailure(f"unexpected source without authorized capture: {label!r}")
+    if observation.get("capture_active"):
+        raise SmokeFailure("read-only browser context unexpectedly enabled audio capture")
+    try:
+        level = float(observation["level"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SmokeFailure("audio capture level is missing or malformed") from exc
+    if not math.isfinite(level) or level != 0:
+        raise SmokeFailure("browser without capture reported a nonzero or invalid input level")
+    if bool(observation.get("playing")) != (source != "idle"):
+        raise SmokeFailure("audio source has not settled to the visible playback state")
+    return source
+
+
 def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
     page.locator('[data-action="vis-settings"]').click()
     selector = page.locator("#visual-performance-mode")
@@ -191,11 +220,26 @@ def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
     if selector.input_value() != "high":
         raise SmokeFailure("fresh context did not preserve the existing high-quality default")
     page.wait_for_function(
-        "() => document.querySelector('#audio-source-status')?.textContent.includes('非实时频谱')",
+        """() => {
+          const label = document.querySelector('#audio-source-status')?.textContent?.trim();
+          const pause = document.querySelector('[data-action="play"] .svg-pause');
+          const playing = Boolean(pause && getComputedStyle(pause).display !== 'none');
+          return playing
+            ? ['音频响应：低潮模拟（非实时频谱）', '音频响应：浏览器本地节拍缓存'].includes(label)
+            : label === '音频响应：空闲';
+        }""",
         timeout=timeout_ms,
     )
-    if float(page.locator("#audio-input-level").get_attribute("value") or 0) != 0:
-        raise SmokeFailure("fixture without capture reported a nonzero input level")
+    observation = page.evaluate("""() => {
+      const pause = document.querySelector('[data-action="play"] .svg-pause');
+      return {
+        label: document.querySelector('#audio-source-status')?.textContent?.trim(),
+        level: document.querySelector('#audio-input-level')?.value,
+        capture_active: document.querySelector('#local-audio-indicator')?.classList.contains('active'),
+        playing: Boolean(pause && getComputedStyle(pause).display !== 'none'),
+      };
+    }""")
+    source = validate_audio_source_observation(observation)
     for mode in ("auto", "saving", "high"):
         selector.select_option(mode)
         page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
@@ -204,7 +248,7 @@ def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
         if selector.input_value() != mode:
             raise SmokeFailure(f"quality mode was not restored: {mode}")
     page.keyboard.press("Escape")
-    return "three persisted quality modes; fallback clearly marked non-realtime with zero capture level"
+    return f"three persisted quality modes; passive source={source}, zero capture level (remote playback unchanged)"
 
 
 def check_preset_lifecycle(page, timeout_ms: int) -> str:
