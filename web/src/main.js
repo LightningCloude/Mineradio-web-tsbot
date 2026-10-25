@@ -22,6 +22,7 @@ import { QueuePanel } from './player/QueuePanel.js';
 import { LoginView } from './player/LoginView.js';
 import { CookieView } from './player/CookieView.js';
 import { VisualSettings } from './player/VisualSettings.js';
+import { AudioPermissionReminder } from './player/AudioPermissionReminder.js';
 
 import { Toast } from './shared/Toast.js';
 import { ConnectionBar } from './shared/ConnectionBar.js';
@@ -179,6 +180,7 @@ function init() {
   document.getElementById('app').appendChild(cookieContainer);
   const cookieView = new CookieView(cookieContainer);
 
+  new AudioPermissionReminder({ capture: localAudioCapture, bus: eventBus });
   new VisualSettings(visSettingsContainer, particleStage, localAudioCapture);
 
   particleStage.start();

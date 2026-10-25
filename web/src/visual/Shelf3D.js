@@ -306,8 +306,6 @@ export class Shelf3D {
     const cy = pad + 6;
     const tx = cx + coverW + COVER_GAP;
     const textRight = W - pad - 18;
-    const isCardHovered = card.index === this._hoveredCardIdx;
-    const isEmphasized = card.isCenter || isCardHovered;
 
     const roundRect = (x, y, w, h, radius) => {
       const r = Math.min(radius, w * 0.5, h * 0.5);
@@ -381,14 +379,10 @@ export class Shelf3D {
       ctx.restore();
     }
 
-    // Cover hairline and card edge.
+    // Keep the cover hairline, without outlining the card's outer perimeter.
     roundRect(cx + 0.5, cy + 0.5, coverW - 1, coverH - 1, 26);
     ctx.strokeStyle = 'rgba(255,255,255,0.13)';
     ctx.lineWidth = 1.25;
-    ctx.stroke();
-    roundRect(pad + 0.75, pad + 0.75, innerW - 1.5, innerH - 1.5, CARD_RADIUS);
-    ctx.strokeStyle = isEmphasized ? 'rgba(220,232,247,0.32)' : 'rgba(255,255,255,0.14)';
-    ctx.lineWidth = isEmphasized ? 1.8 : 1.15;
     ctx.stroke();
 
     // Typography follows the reference shelf: compact tag, substantial title,
@@ -530,18 +524,6 @@ export class Shelf3D {
       card._plBtnCX = heartCX;
       card._plBtnCY = heartCY;
       card._plBtnR = heartR;
-    }
-
-    // Selected/hovered edge glow stays narrow and neutral instead of neon.
-    if (isEmphasized) {
-      ctx.save();
-      ctx.shadowColor = isCardHovered ? 'rgba(191,214,241,0.34)' : 'rgba(180,202,229,0.20)';
-      ctx.shadowBlur = isCardHovered ? 16 : 10;
-      roundRect(pad + 2.5, pad + 2.5, innerW - 5, innerH - 5, CARD_RADIUS - 2);
-      ctx.strokeStyle = isCardHovered ? 'rgba(225,236,249,0.54)' : 'rgba(211,225,243,0.28)';
-      ctx.lineWidth = isCardHovered ? 2.1 : 1.25;
-      ctx.stroke();
-      ctx.restore();
     }
 
     card.mesh.material.map.needsUpdate = true;
@@ -831,6 +813,7 @@ export class Shelf3D {
     const title = item.title || '';
     const line = artist ? artist + ' - ' + title : title;
     const ok = playlistManager.addSongToDefault(line);
+    if (playlistManager.lastError) return;
     eventBus.emit('toast', {
       message: ok ? 'Added to playlist: ' + line : 'Already in playlist',
       level: ok ? 'success' : 'info'

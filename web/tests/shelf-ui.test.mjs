@@ -69,6 +69,49 @@ function queue(length, prefix = 'Song') {
   }));
 }
 
+for (const { center, hovered } of [
+  { center: false, hovered: false }, { center: true, hovered: false },
+  { center: false, hovered: true }, { center: true, hovered: true },
+]) {
+  test(`card drawing has no outer border or edge glow (center=${center}, hover=${hovered})`, () => {
+    const shelf = makeShelf();
+    const strokes = [];
+    let path = [];
+    const ctx = {
+      clearRect() {}, fill() {}, fillText() {}, save() {}, restore() {}, closePath() {},
+      createLinearGradient() { return { addColorStop() {} }; },
+      measureText(text) { return { width: String(text).length * 12 }; },
+      beginPath() { path = []; },
+      moveTo(x, y) { path.push([x, y]); },
+      lineTo(x, y) { path.push([x, y]); },
+      arcTo(x1, y1, x2, y2) { path.push([x1, y1], [x2, y2]); },
+      arc() {},
+      stroke() { strokes.push({ points: [...path], shadow: this.shadowBlur || 0 }); },
+    };
+    const card = shelf._cards[0];
+    card.index = 0;
+    card.isCenter = center;
+    card.mesh.userData.canvas = { getContext: () => ctx };
+    shelf._hoveredCardIdx = hovered ? 0 : -1;
+    shelf._pillHovered = hovered;
+    shelf._heartHovered = hovered;
+    const version = card.mesh.material.map.version;
+    Shelf3D.prototype._redrawCard.call(shelf, card, queue(1)[0], 0, null);
+    const perimeterStrokes = strokes.filter(({ points }) => points.length
+      && Math.min(...points.map(point => point[0])) < 24
+      && Math.max(...points.map(point => point[0])) > 1000
+      && Math.min(...points.map(point => point[1])) < 24
+      && Math.max(...points.map(point => point[1])) > 615);
+    assert.equal(perimeterStrokes.length, 0);
+    assert.ok(strokes.every(stroke => stroke.shadow === 0));
+    assert.ok(strokes.some(stroke => stroke.points.some(([x, y]) => x === 50.5 && y === 24.5)), 'cover hairline is unchanged');
+    assert.equal(Boolean(card._playBtn), center);
+    if (center) assert.deepEqual([card._playBtn.w, card._playBtn.h], [310, 72]);
+    assert.ok(card._plBtnR > 0);
+    assert.ok(card.mesh.material.map.version > version);
+  });
+}
+
 
 test('shelf keeps the existing five-card pool and draws the first center action immediately', () => {
   const shelf = makeShelf();

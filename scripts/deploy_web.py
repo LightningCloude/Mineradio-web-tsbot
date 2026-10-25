@@ -516,6 +516,22 @@ def compose_command(state: RemoteState, override: str, *args: str) -> str:
     )
 
 
+def web_readiness_script() -> str:
+    """A running container can precede Nginx listening; bound every probe/retry."""
+    return '''web_ready=0
+web_attempt=0
+while [ "$web_attempt" -lt 30 ]; do
+  if sudo docker exec "$container" wget -T 2 -qO- http://127.0.0.1:8080/ >/dev/null 2>&1; then
+    web_ready=1
+    break
+  fi
+  web_attempt=$((web_attempt + 1))
+  sleep 1
+done
+[ "$web_ready" = 1 ] || { echo "Web service did not become ready after 30 bounded probes" >&2; exit 1; }
+'''
+
+
 def build_deploy_script(
     state: RemoteState,
     plan: ReleasePlan,
@@ -636,7 +652,7 @@ switched=1
 {compose_new} up -d --no-deps web
 [ "$(sudo docker inspect --format '{{{{.Config.Image}}}}' "$container")" = "$new_image" ]
 [ "$(sudo docker inspect --format '{{{{.State.Running}}}}' "$container")" = true ]
-sudo docker exec "$container" wget -qO- http://127.0.0.1:8080/ >/dev/null
+{web_readiness_script()}
 
 while read -r service expected_id; do
   [ -n "$service" ] || continue
@@ -717,7 +733,7 @@ cd "$working_dir"
 {compose_target} up -d --no-deps web
 [ "$(sudo docker inspect --format '{{{{.Config.Image}}}}' "$container")" = "$target_image" ]
 [ "$(sudo docker inspect --format '{{{{.State.Running}}}}' "$container")" = true ]
-sudo docker exec "$container" wget -qO- http://127.0.0.1:8080/ >/dev/null
+{web_readiness_script()}
 
 while read -r service expected_id; do
   [ -n "$service" ] || continue

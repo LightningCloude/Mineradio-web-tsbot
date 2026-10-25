@@ -161,7 +161,27 @@ def open_and_close(page, button: str, panel: str, timeout_ms: int) -> str:
     return f"{panel} opens and closes"
 
 
+def dismiss_audio_reminder(page) -> None:
+    reminder = page.locator('#audio-permission-reminder')
+    if reminder.count() and reminder.is_visible():
+        reminder.locator('[data-audio-permission="dismiss"]').click()
+
+
+def check_audio_permission_reminder(page, timeout_ms: int) -> str:
+    reminder = page.locator('#audio-permission-reminder')
+    reminder.wait_for(state='visible', timeout=timeout_ms)
+    expected_support = page.evaluate("() => isSecureContext && typeof navigator.mediaDevices?.getDisplayMedia === 'function'")
+    if reminder.locator('[data-audio-permission="authorize"]').is_disabled() == expected_support:
+        raise SmokeFailure('audio authorization button does not match browser support')
+    if '共享系统音频' not in reminder.inner_text():
+        raise SmokeFailure('audio reminder does not explain system audio sharing')
+    dismiss_audio_reminder(page)
+    reminder.wait_for(state='hidden', timeout=timeout_ms)
+    return 'passive reminder explains sharing and can be dismissed without audio capture'
+
+
 def check_safe_panels(page, timeout_ms: int) -> str:
+    dismiss_audio_reminder(page)
     checks = (
         ('[data-action="search"]', "#search-overlay .search-panel"),
         ('[data-action="queue"]', "#queue-panel"),
@@ -213,6 +233,7 @@ def validate_audio_source_observation(observation: dict[str, Any]) -> str:
 
 
 def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
+    dismiss_audio_reminder(page)
     page.locator('[data-action="vis-settings"]').click()
     selector = page.locator("#visual-performance-mode")
     if selector.locator("option").evaluate_all("options => options.map(option => option.value)") != ["high", "auto", "saving"]:
@@ -243,6 +264,8 @@ def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
     for mode in ("auto", "saving", "high"):
         selector.select_option(mode)
         page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+        expect_visible(page, ".player-bar", timeout_ms)
+        dismiss_audio_reminder(page)
         page.locator('[data-action="vis-settings"]').click()
         selector = page.locator("#visual-performance-mode")
         if selector.input_value() != mode:
@@ -252,6 +275,7 @@ def check_quality_and_source(page, base_url: str, timeout_ms: int) -> str:
 
 
 def check_preset_lifecycle(page, timeout_ms: int) -> str:
+    dismiss_audio_reminder(page)
     page.locator('[data-action="vis-settings"]').click()
     for index in range(30):
         preset = index % 3
@@ -260,7 +284,10 @@ def check_preset_lifecycle(page, timeout_ms: int) -> str:
             "expected => document.querySelector('.preset-btn.active')?.dataset.preset === String(expected)",
             arg=preset, timeout=timeout_ms,
         )
+        dismiss_audio_reminder(page)
     page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+    expect_visible(page, ".player-bar", timeout_ms)
+    dismiss_audio_reminder(page)
     page.locator('[data-action="vis-settings"]').click()
     if page.locator('.preset-btn.active').get_attribute("data-preset") != "2":
         raise SmokeFailure("last visual preset was not restored")
@@ -331,6 +358,7 @@ def check_ephemeral_wallpaper(page, base_url: str, timeout_ms: int) -> str:
     seed_ephemeral_wallpaper(page)
     page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
     expect_visible(page, ".player-bar", timeout_ms)
+    dismiss_audio_reminder(page)
     page.locator('[data-action="vis-settings"]').click()
     expect_visible(page, "#visual-settings-panel .vis-settings-panel", timeout_ms)
 
@@ -640,6 +668,8 @@ def run_browser_smoke(args: argparse.Namespace, base_url: str) -> dict[str, Any]
             lambda: _navigate(page, base_url, timeout_ms),
         )
         reporter.run("app-shell", lambda: check_app_shell(page, timeout_ms))
+        if args.exercise_visuals:
+            reporter.run("audio-permission-reminder", lambda: check_audio_permission_reminder(page, timeout_ms))
         reporter.run("safe-panels", lambda: check_safe_panels(page, timeout_ms))
         reporter.run(
             "local-wallpaper",

@@ -6,6 +6,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -71,7 +73,59 @@ def remote_state():
     )
 
 
+def posix_shell():
+    shell = shutil.which('sh')
+    if shell:
+        return shell
+    git = shutil.which('git')
+    if git:
+        candidate = Path(git).resolve().parent.parent / 'bin' / 'bash.exe'
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 class DeployWebTests(unittest.TestCase):
+    def test_deploy_and_rollback_wait_for_web_before_completing(self):
+        state = remote_state()
+        plan = deploy_web.make_plan(state, '20261024-web-r2', 'https://music.example.com')
+        scripts = [
+            deploy_web.build_deploy_script(state, plan, user='ubuntu', archive_sha256='a' * 64),
+            deploy_web.build_rollback_script(state, target_override='/srv/releases/older/production-compose.override.yml', target_image='minerats-web:older'),
+        ]
+        for script in scripts:
+            with self.subTest(script=script[:30]):
+                self.assertIn(deploy_web.web_readiness_script(), script)
+                self.assertLess(script.index('web_ready=0'), script.rindex('complete=1'))
+                self.assertIn('wget -T 2', script)
+
+    @unittest.skipUnless(posix_shell(), 'A POSIX shell is needed for the isolated readiness simulation')
+    def test_cold_web_start_retries_until_ready_without_a_false_rollback(self):
+        script = '''set -eu
+container=isolated-fixture
+probe_calls=0
+sudo() { probe_calls=$((probe_calls + 1)); [ "$probe_calls" -ge 3 ]; }
+sleep() { :; }
+trap 'echo calls=$probe_calls' EXIT
+''' + deploy_web.web_readiness_script()
+        result = subprocess.run([posix_shell(), '-c', script], text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('calls=3', result.stdout)
+
+    @unittest.skipUnless(posix_shell(), 'A POSIX shell is needed for the isolated readiness simulation')
+    def test_unready_web_fails_after_the_bounded_retry_limit(self):
+        script = '''set -eu
+container=isolated-fixture
+probe_calls=0
+sudo() { probe_calls=$((probe_calls + 1)); return 1; }
+sleep() { :; }
+trap 'echo calls=$probe_calls' EXIT
+''' + deploy_web.web_readiness_script()
+        result = subprocess.run([posix_shell(), '-c', script], text=True, capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('calls=30', result.stdout)
+        self.assertIn('30 bounded probes', result.stderr)
+
     def test_deploy_and_rollback_default_to_read_only(self):
         parser = deploy_web.build_parser()
         deploy_args = parser.parse_args(["deploy", "--host", "example.com"])

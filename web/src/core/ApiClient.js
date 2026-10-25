@@ -104,7 +104,20 @@ export function createApiClient({
 
   return {
     search(keyword, options = {}) {
-      return request('GET', `/external/search?keywords=${encodeURIComponent(keyword)}&source=qqmusic`, null, options);
+      const paging = options.page != null || options.limit != null
+        ? `&page=${Math.max(1, Number(options.page) || 1)}&limit=${Math.min(50, Math.max(1, Number(options.limit) || 20))}` : '';
+      return request('GET', `/external/search?keywords=${encodeURIComponent(keyword)}&source=qqmusic${paging}`, null, options);
+    },
+
+    searchPlaylists(keyword, options = {}) {
+      const page = Math.max(1, Number(options.page) || 1);
+      const limit = Math.min(50, Math.max(1, Number(options.limit) || 20));
+      return request('GET', `/qqmusic/search?keywords=${encodeURIComponent(keyword)}&search_type=3&page=${page}&limit=${limit}`, null, options);
+    },
+
+    getPlaylist(id, options = {}) {
+      if (!/^\d+$/.test(String(id))) return Promise.reject(new Error('歌单 ID 无效'));
+      return request('GET', `/qqmusic/playlist/${encodeURIComponent(id)}`, null, options);
     },
 
     getQueue(options = {}) {

@@ -304,6 +304,7 @@ export class VisualSettings {
     this._stage.setPreset(idx);
     this._refreshPresetButtons(idx);
     if (persist) saveVisualPreset(idx);
+    eventBus.emit('visual:preset-changed', { preset: idx, userInitiated: persist });
     // Keep the slider synchronized with each particle preset's original default.
     if (idx === 0 || idx === 1) {
       const pointScale = idx === 0 ? 2.2 : 1.2;

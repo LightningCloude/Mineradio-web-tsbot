@@ -132,7 +132,17 @@ def main(argv: list[str] | None = None) -> int:
             result = browser_smoke.run_browser_smoke(args, base_url)
             result["profile"] = "mobile" if mobile else "desktop"
             reports.append(result)
-    result = {"ok": all(report["ok"] for report in reports), "isolated_readonly": True, "profiles": reports}
+        if __package__:
+            from .playlist_browser_smoke import run_playlist_checks
+        else:
+            from playlist_browser_smoke import run_playlist_checks
+        playlist_report = run_playlist_checks(base_url, arguments.report.parent / "playlists")
+        if __package__:
+            from .search_browser_smoke import run_search_checks
+        else:
+            from search_browser_smoke import run_search_checks
+        search_report = run_search_checks(base_url, arguments.report.parent / "search")
+    result = {"ok": all(report["ok"] for report in reports) and playlist_report["ok"] and search_report["ok"], "isolated_readonly": True, "profiles": reports, "playlist_navigation": playlist_report, "search_playlists": search_report}
     arguments.report.parent.mkdir(parents=True, exist_ok=True)
     arguments.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -93,6 +93,20 @@ test('API authentication headers remain compatible and 204 responses are support
   assert.equal(captured.headers['x-admin-token'], 'admin-token');
 });
 
+test('search API retains old callers, adds paging, and reuses existing QQ playlist routes', async () => {
+  const requests = [];
+  const api = createApiClient({ bus: noBus, fetchImpl: async (url, options) => { requests.push([url, options.method]); return response({}); } });
+  await api.search('one'); await api.search('two', { page: 2, limit: 20 });
+  await api.searchPlaylists('轻音乐', { page: 3 }); await api.getPlaylist('123');
+  assert.deepEqual(requests, [
+    ['/api/external/search?keywords=one&source=qqmusic', 'GET'],
+    ['/api/external/search?keywords=two&source=qqmusic&page=2&limit=20', 'GET'],
+    [`/api/qqmusic/search?keywords=${encodeURIComponent('轻音乐')}&search_type=3&page=3&limit=20`, 'GET'],
+    ['/api/qqmusic/playlist/123', 'GET'],
+  ]);
+  await assert.rejects(api.getPlaylist('../cookie'), /无效/); assert.equal(requests.length, 4);
+});
+
 test('late lyrics from a previous track cannot replace the current track, even if abort is ignored', async () => {
   const appState = makeState();
   const pending = new Map();
@@ -242,11 +256,12 @@ test('connecting twice creates one socket and callbacks from replaced sockets ca
 });
 
 function searchContainer() {
-  const results = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null };
+  globalThis.window = { innerHeight: 900, addEventListener() {}, removeEventListener() {} };
+  const results = { innerHTML: '', scrollTop: 0, setAttribute() {}, querySelectorAll: () => [], querySelector: () => null };
   const input = { value: '', focus() {}, events: {}, addEventListener(type, fn) { this.events[type] = fn; } };
-  const button = { addEventListener() {} };
+  const button = { addEventListener() {}, setAttribute() {}, focus() {} };
   return {
-    style: {}, innerHTML: '', results, input,
+    style: { setProperty() {} }, innerHTML: '', results, input, addEventListener() {}, removeEventListener() {}, querySelectorAll: () => [],
     querySelector(selector) {
       if (selector === '.search-results') return results;
       if (selector === '.search-input') return input;
@@ -286,20 +301,45 @@ test('typing immediately invalidates an old response during the debounce window'
   panel.dispose();
 });
 
-test('stale cookie checks cannot replace newer search results', async () => {
-  const cookie = deferred();
+test('empty search results never imply an expired QQ cookie or request administrator status', async () => {
+  let cookieChecks = 0;
   const container = searchContainer();
   const panel = new SearchPanel(container, { apiClient: {
     search: async keyword => keyword === 'first' ? { songs: [] } : { songs: [{ title: 'current' }] },
-    getQQCookieStatus: () => cookie.promise,
+    getQQCookieStatus: () => { cookieChecks++; return { cookie_set: false }; },
   } });
   const old = panel._doSearch('first');
-  await flush();
-  await panel._doSearch('second');
-  cookie.resolve({ cookie_set: false });
   await old;
+  assert.match(container.results.innerHTML, /未找到/);
+  await panel._doSearch('second');
+  assert.equal(cookieChecks, 0);
   assert.match(container.results.innerHTML, /current/);
   assert.doesNotMatch(container.results.innerHTML, /登录已过期/);
+  panel.dispose();
+});
+
+test('a failed next page preserves songs and retry uses the same page with MID deduplication', async () => {
+  const pages = []; let fail = true; const container = searchContainer();
+  const panel = new SearchPanel(container, { apiClient: { search: async (_keyword, options) => {
+    pages.push(options.page);
+    if (options.page === 1) return { items: [{ song_mid: 'a', title: 'first' }], has_more: true };
+    if (fail) { fail = false; throw Object.assign(new Error(), { status: 503 }); }
+    return { items: [{ song_mid: 'a', title: 'duplicate' }, { song_mid: 'b', title: 'second' }], has_more: false };
+  } } });
+  await panel._doSearch('word'); await panel._doSearch('word', true);
+  assert.match(container.results.innerHTML, /first/); assert.match(container.results.innerHTML, /重新尝试/);
+  await panel._doSearch('word', true);
+  assert.deepEqual(pages, [1, 2, 2]); assert.deepEqual(panel._pages.songs.items.map(song => song.song_mid), ['a', 'b']);
+  panel.dispose();
+});
+
+test('leaving a pending playlist detail rejects its late response without replacing the search view', async () => {
+  const entry = deferred(); const container = searchContainer();
+  const panel = new SearchPanel(container, { apiClient: { getPlaylist: () => entry.promise } });
+  const pending = panel._openPlaylist({ id: '123', name: 'old' });
+  panel._back(); entry.resolve({ code: 0, cdlist: [{ dissid: '123', dissname: 'stale', songlist: [] }] });
+  await pending;
+  assert.equal(panel._view, 'results'); assert.doesNotMatch(container.results.innerHTML, /stale/);
   panel.dispose();
 });
 
