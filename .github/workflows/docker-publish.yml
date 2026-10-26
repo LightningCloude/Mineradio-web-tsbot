@@ -124,6 +124,23 @@ jobs:
       - name: Audit web dependencies
         run: npm --prefix web audit --registry=https://registry.npmjs.org
 
+      - name: Install voice-service build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake
+
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Test voice-service with locked dependencies
+        env:
+          # CMake 4 removed old policies used by audiopus_sys's bundled Opus.
+          # Keep the vendored source/linkage unchanged; apply the supported floor.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: cargo test --manifest-path voice-service/Cargo.toml --locked
+
       - name: Install Chromium for browser regression checks
         run: python -m playwright install --with-deps chromium
 
@@ -138,19 +155,6 @@ jobs:
           path: artifacts/ci-browser/
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Install voice-service build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake
-
-      - name: Set up Rust 1.88
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.88.0
-
-      - name: Test voice-service with locked dependencies
-        run: cargo test --manifest-path voice-service/Cargo.toml --locked
 
   publish:
     needs: validate
@@ -299,6 +303,8 @@ jobs:
           toolchain: 1.88.0
 
       - name: Build voice-service
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: cargo build --manifest-path voice-service/Cargo.toml --release --locked
 
       - name: Create release bundle
