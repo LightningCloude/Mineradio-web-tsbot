@@ -255,14 +255,17 @@ class TsChatCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_clear_command_clears_queue_and_playback_state(self) -> None:
         count_result = unittest.mock.Mock()
         count_result.scalar.return_value = 3
+        delete_result = unittest.mock.Mock(rowcount=3)
         session = unittest.mock.Mock()
-        session.execute.side_effect = [count_result, unittest.mock.Mock()]
+        session.execute.side_effect = [count_result, delete_result]
 
         with (
             patch.object(main, "new_session", return_value=session),
             patch.object(main, "_shuffle_queue", [1, 2, 3]),
             patch.object(main, "_current_shuffle_index", 1),
-            patch.object(main, "_invalidate_play_requests", AsyncMock()) as invalidate,
+            patch.object(main, "_play_request_generation", 5),
+            patch.object(main, "_pending_queue_item_id", 2),
+            patch.object(main, "reserve_cleared_queue_ids") as reserve,
             patch.object(main, "_set_now_playing_queue_item", AsyncMock()) as clear_now_playing,
             patch.object(main, "_schedule_ts_description_update"),
             patch.object(main.voice, "stop", AsyncMock()) as stop,
@@ -272,10 +275,12 @@ class TsChatCommandTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual([], main._shuffle_queue)
             self.assertEqual(-1, main._current_shuffle_index)
+            self.assertEqual(6, main._play_request_generation)
+            self.assertIsNone(main._pending_queue_item_id)
 
         session.commit.assert_called_once_with()
         session.close.assert_called_once_with()
-        invalidate.assert_awaited_once_with()
+        reserve.assert_called_once_with(3)
         clear_now_playing.assert_awaited_once_with(None)
         stop.assert_awaited_once_with()
         self.assertIn("已清空播放队列（3 首）", notice.await_args.args[0])

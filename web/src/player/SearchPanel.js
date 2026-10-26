@@ -4,6 +4,7 @@ import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 import { playlistManager } from '../shared/PlaylistManager.js';
 import { playlistImporter } from './PlaylistImporter.js';
+import { queueMutationGate } from '../core/QueueMutationGate.js';
 import { LatestRequest } from '../core/LatestRequest.js';
 import { songPage, playlistPage, playlistDetail, PlaylistDetailCache, safeCover, songLine } from '../core/QQMusicData.js';
 
@@ -35,6 +36,7 @@ export class SearchPanel {
     this._unsubscribe = bus.on('ui:changed', ui => this._onUI(ui));
     this._unsubscribePlaylists = bus.on('playlist:changed', () => { if (this._wasOpen) this._renderDetailActions(); });
     this._unsubscribeImport = importer?.subscribe(() => this._renderProgress());
+    this._unsubscribeQueueGate = queueMutationGate.subscribe(() => this._renderProgress());
     this._viewport = () => {
       const viewport = window.visualViewport;
       container.style.setProperty('--search-viewport-height', `${viewport?.height || window.innerHeight}px`);
@@ -244,7 +246,7 @@ export class SearchPanel {
     element.innerHTML = `<button type="button" class="search-primary-btn" data-search-action="append-playlist" ${!usable || this._importer?.running ? 'disabled' : ''}>${icons.add}加入队列</button><button type="button" class="search-secondary-btn" data-search-action="play-playlist" ${!usable || this._importer?.running ? 'disabled' : ''}>${icons.play}播放全部</button><button type="button" class="search-secondary-btn" data-search-action="save-playlist" ${!usable || saved ? 'disabled' : ''}>${icons.save}${saved ? '已保存' : '保存到我的歌单'}</button>`;
   }
   async _enqueue(song, playNow, button) {
-    if (!song.song_mid || this._pendingWrites.has(song.song_mid) || this._importer?.running) return;
+    if (!song.song_mid || this._pendingWrites.has(song.song_mid) || this._importer?.running || queueMutationGate.clearing) return;
     this._pendingWrites.add(song.song_mid); if (button) button.disabled = true;
     try {
       await this._api.addToQueue(song.song_mid, { title: song.title, artist: song.artist, duration_ms: song.duration_ms, cover_url: song.cover, playNow });
@@ -286,7 +288,7 @@ export class SearchPanel {
     }
     for (const button of this.container.querySelectorAll('[data-search-action="append-playlist"], [data-search-action="play-playlist"], [data-song-action="play"], [data-song-action="add"]')) {
       const songs = this._view === 'detail' ? this._detail?.songs : this._pages.songs.items; const song = songs?.[Number(button.dataset.songIndex)];
-      button.disabled = Boolean(this._importer?.running) || (button.dataset.songIndex != null ? !song?.song_mid || this._pendingWrites.has(song.song_mid) : Boolean(this._pendingWrites.size) || !songs?.some(song => song.song_mid));
+      button.disabled = queueMutationGate.clearing || Boolean(this._importer?.running) || (button.dataset.songIndex != null ? !song?.song_mid || this._pendingWrites.has(song.song_mid) : Boolean(this._pendingWrites.size) || !songs?.some(song => song.song_mid));
     }
   }
   _cancelSearch() {
@@ -294,7 +296,7 @@ export class SearchPanel {
     for (const result of Object.values(this._pages)) result.loading = false; this._detailLoading = false;
   }
   dispose() {
-    this._cancelSearch(); this._queueRequest?.cancel(); this._unsubscribe?.(); this._unsubscribePlaylists?.(); this._unsubscribeImport?.();
+    this._cancelSearch(); this._queueRequest?.cancel(); this._unsubscribe?.(); this._unsubscribePlaylists?.(); this._unsubscribeImport?.(); this._unsubscribeQueueGate?.();
     this.container.removeEventListener('click', this._click); this.container.removeEventListener('keydown', this._keydown); this.container.removeEventListener('error', this._imageError, true);
     window.visualViewport?.removeEventListener('resize', this._viewport); window.visualViewport?.removeEventListener('scroll', this._viewport); window.removeEventListener('resize', this._viewport);
   }

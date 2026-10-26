@@ -1,6 +1,7 @@
 import { state } from '../shared/StateManager.js';
 import { eventBus } from '../shared/EventBus.js';
 import { buildQQLoginCheckQuery } from './QQLoginContract.js';
+import { queueMutationGate } from './QueueMutationGate.js';
 
 const BASE = '/api';
 
@@ -11,6 +12,7 @@ export function createApiClient({
   stateManager = state,
   bus = eventBus,
   timeoutMs = 20000,
+  queueGate = queueMutationGate,
 } = {}) {
   async function request(method, path, body = null, options = {}) {
     const controller = new AbortController();
@@ -125,7 +127,7 @@ export function createApiClient({
     },
 
     addToQueue(songMid, meta = {}) {
-      return request('POST', '/external/queue', {
+      return queueGate.write(() => request('POST', '/external/queue', {
         song_mid: songMid,
         source: 'qqmusic',
         play_now: meta.playNow || false,
@@ -133,7 +135,11 @@ export function createApiClient({
         artist: meta.artist || '',
         duration_ms: meta.duration_ms || 0,
         cover_url: meta.cover_url || meta.artwork_url || '',
-      });
+      }));
+    },
+
+    clearQueue(options = {}) {
+      return request('DELETE', '/external/queue?stop_playback=false', null, options);
     },
 
     removeFromQueue(index) {

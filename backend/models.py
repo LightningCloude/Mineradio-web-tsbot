@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 import secrets
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+import threading
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, event, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -64,6 +65,30 @@ class QueueItem(Base):
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cover_url: Mapped[str] = mapped_column(Text, default="")
     source_url: Mapped[str] = mapped_column(Text)
+
+
+# SQLite without AUTOINCREMENT reuses IDs after a full DELETE. Keep IDs unique
+# during this backend lifetime so the detached, still-playing track cannot alias
+# a newly enqueued song. No table rebuild or runtime database migration required.
+_queue_id_floor = 0
+_queue_id_lock = threading.Lock()
+
+
+def reserve_cleared_queue_ids(highest_id: int) -> None:
+    global _queue_id_floor
+    with _queue_id_lock:
+        _queue_id_floor = max(_queue_id_floor, highest_id)
+
+
+@event.listens_for(QueueItem, "before_insert")
+def _avoid_cleared_queue_id_reuse(mapper, connection, target) -> None:
+    global _queue_id_floor
+    if target.id is not None or not _queue_id_floor or connection.dialect.name != "sqlite":
+        return
+    with _queue_id_lock:
+        highest = int(connection.execute(select(func.max(QueueItem.id))).scalar() or 0)
+        _queue_id_floor = max(_queue_id_floor, highest) + 1
+        target.id = _queue_id_floor
 
 
 class HistoryItem(Base):

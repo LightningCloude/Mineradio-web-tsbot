@@ -2,6 +2,7 @@ import { state } from '../shared/StateManager.js';
 import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
+import { QueueClearDialog } from './QueueClearDialog.js';
 
 const VOLUME_SLIDER_MAX = 100;
 const VOLUME_OUTPUT_MAX = 25;
@@ -161,20 +162,8 @@ export class PlayerUI {
   }
 
   async _clearQueue() {
-    const queue = state.queue;
-    if (!queue || !queue.length) return;
-    if (!confirm(`Clear all ${queue.length} songs from the queue?`)) return;
-    try {
-      // Remove each item by its database ID (reverse order to avoid index shifts)
-      for (let i = queue.length - 1; i >= 0; i--) {
-        const itemId = queue[i].id;
-        if (itemId != null) await api.removeFromQueue(itemId);
-      }
-      state.updateQueue([]);
-      eventBus.emit('toast', { message: 'Queue cleared', level: 'success' });
-    } catch (e) {
-      eventBus.emit('toast', { message: 'Failed to clear queue', level: 'error' });
-    }
+    this._queueClearDialog ||= new QueueClearDialog();
+    this._queueClearDialog.open(this.container.querySelector('[data-action="clear-queue"]'));
   }
 
   _toggleImmersive() {

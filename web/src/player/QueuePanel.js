@@ -4,6 +4,7 @@ import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 import { playlistManager } from '../shared/PlaylistManager.js';
 import { playlistImporter } from './PlaylistImporter.js';
+import { queueMutationGate } from '../core/QueueMutationGate.js';
 
 const icon = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const icons = {
@@ -30,6 +31,7 @@ export class QueuePanel {
     this._importResult = null;
     this._buildDOM();
     this._unsubscribeImport = importer.subscribe(() => this._syncImport());
+    this._unsubscribeQueueGate = queueMutationGate.subscribe(() => this._render());
     bus.on('ui:changed', (ui) => {
       if (ui.queueOpen) {
         const wasOpen = this.container.classList.contains('show');
@@ -198,7 +200,7 @@ export class QueuePanel {
         ? `<img class="playlist-card-cover" src="${this._escAttr(cover)}" alt="" loading="lazy" />`
         : `<span class="playlist-card-cover playlist-card-placeholder">${icons.music}</span>`;
       return `<article class="playlist-card-item" data-id="${this._escAttr(playlist.id)}">
-        <button type="button" class="playlist-card-import" data-id="${this._escAttr(playlist.id)}" aria-label="${this._escAttr(`导入歌单：${playlist.name}`)}" ${this._importing ? 'disabled' : ''}>
+        <button type="button" class="playlist-card-import" data-id="${this._escAttr(playlist.id)}" aria-label="${this._escAttr(`导入歌单：${playlist.name}`)}" ${this._importing || queueMutationGate.clearing ? 'disabled' : ''}>
           ${coverMarkup}
           <span class="playlist-card-info"><span class="playlist-card-name">${this._esc(playlist.name)}</span><span class="playlist-card-sub">${songCount} 首歌曲 · 导入队列</span></span>
           <span class="playlist-card-arrow">${icons.arrow}</span>

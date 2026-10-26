@@ -2,13 +2,15 @@ import { api } from '../core/ApiClient.js';
 import { eventBus } from '../shared/EventBus.js';
 import { state } from '../shared/StateManager.js';
 import { normalizeSong, songLine } from '../core/QQMusicData.js';
+import { queueMutationGate } from '../core/QueueMutationGate.js';
 
 /** One page-wide batch. Read failures may continue; uncertain writes stop without retry. */
 export class PlaylistImporter {
   constructor({ apiClient = api, bus = eventBus, stateManager = state, now = Date.now,
-    sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), interval = 300 } = {}) {
+    sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), interval = 300, queueGate = queueMutationGate } = {}) {
     Object.assign(this, { _api: apiClient, _bus: bus, _state: stateManager, _now: now, _sleep: sleep, _interval: interval });
     this._listeners = new Set(); this.task = null; this._lastWrite = -Infinity;
+    this._queueGate = queueGate;
   }
   get running() { return Boolean(this.task?.running); }
   subscribe(callback) { this._listeners.add(callback); return () => this._listeners.delete(callback); }
@@ -16,9 +18,16 @@ export class PlaylistImporter {
     for (const listener of this._listeners) { try { listener(this.task); } catch (error) { console.error('[PlaylistImporter] view update failed', error); } }
   }
   stop() { if (this.running) { this.task.stopRequested = true; this._notify(); } }
+  async stopAndWait() {
+    if (!this.running) return;
+    const stopped = new Promise(resolve => {
+      const unsubscribe = this.subscribe(() => { if (!this.running) { unsubscribe(); resolve(); } });
+    });
+    this.stop(); await stopped;
+  }
 
   async start({ id, name, entries, playNow = false, playFirstSuccess = true }) {
-    if (this.running || !entries?.length) return null;
+    if (this.running || this._queueGate.clearing || !entries?.length) return null;
     const task = this.task = {
       id, name, running: true, total: entries.length, ok: 0, fail: 0, current: '',
       stopped: false, stopRequested: false, uncertain: false, interrupted: false,

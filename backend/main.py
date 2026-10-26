@@ -5,6 +5,7 @@ from collections import deque
 import hashlib
 from html import unescape
 import hmac
+import json
 import math
 import os
 import random
@@ -37,7 +38,7 @@ from .auth_contracts import (
 )
 from .crypto import decrypt_text, encrypt_text
 from .db import create_db_and_tables, get_database_url, get_session, get_sqlite_db_path, new_session
-from .models import AdminCredential, HistoryItem, QueueItem, Secret
+from .models import AdminCredential, HistoryItem, QueueItem, Secret, reserve_cleared_queue_ids
 from .bandwidth import copy_chunks_with_rate_limit
 from .playback_contracts import build_ws_progress_payload, resolve_qqmusic_cover_url
 from .auth import (
@@ -164,6 +165,7 @@ async def api_token_middleware(request: Request, call_next):
 
 _chat_task: asyncio.Task[None] | None = None
 _current_queue_item_id: int | None = None
+_cleared_playing_item: QueueItem | None = None
 _pending_queue_item_id: int | None = None
 _current_source_url: str = ""
 _playback_lock = asyncio.Lock()
@@ -344,6 +346,7 @@ async def _startup() -> None:
     finally:
         session.close()
 
+    await _restore_release_playback()
     _schedule_ts_description_update()
 
     if _chat_task is None or _chat_task.done():
@@ -375,7 +378,9 @@ async def _set_now_playing_queue_item(
 ) -> None:
     global _current_queue_item_id, _current_source_url, _play_started_at, _paused_at, _paused_total_s, _current_duration_ms
     global _current_artist, _current_album, _current_artwork_url
+    global _cleared_playing_item
     async with _playback_lock:
+        _cleared_playing_item = None
         _current_queue_item_id = item_id
         _current_source_url = (source_url or "").strip()
 
@@ -399,6 +404,61 @@ async def _set_now_playing_queue_item(
     _schedule_ts_description_update()
 
 
+async def _restore_release_playback() -> bool:
+    """Consume an operator-provided, one-shot restart checkpoint; never control audio.
+
+    Unset in ordinary deployments. A checkpoint is accepted only while the voice
+    process is still playing/paused on the exact same source, within two minutes.
+    The private file is consumed once and no URLs or credentials are logged.
+    """
+    global _play_started_at, _paused_at, _paused_total_s, _shuffle_enabled, _repeat_mode
+    global _shuffle_queue, _current_shuffle_index
+    checkpoint = os.environ.get("TSBOT_RELEASE_PLAYBACK_CHECKPOINT", "")
+    if not checkpoint or not Path(checkpoint).is_file():
+        return False
+    path = Path(checkpoint)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        age = time.time() - float(payload["captured_at"])
+        state = payload.get("state")
+        if not 0 <= age <= 120 or state not in ("playing", "paused"):
+            return False
+        status = await voice.get_status()
+        if status.now_playing_source_url != payload.get("now_playing_source_url") or not status.now_playing_source_url:
+            return False
+        if str(status.state).upper() != ("STATE_PAUSED" if state == "paused" else "STATE_PLAYING"):
+            return False
+        session = new_session()
+        try:
+            row = session.get(QueueItem, int(payload["track_id"]))
+            if row is None:
+                return False
+            await _set_now_playing_queue_item(row.id, status.now_playing_source_url,
+                duration_ms=row.duration, artist=row.artist, album=row.album, artwork_url=row.cover_url)
+            queued_ids = list(session.execute(select(QueueItem.id).order_by(QueueItem.id)).scalars())
+        finally:
+            session.close()
+        position = max(0.0, float(payload.get("current_time", 0))) + (age if state == "playing" else 0)
+        if _current_duration_ms > 0:
+            position = min(position, _current_duration_ms / 1000)
+        now = time.monotonic()
+        async with _playback_lock:
+            _play_started_at = now - position
+            _paused_at = now if state == "paused" else None
+            _paused_total_s = 0.0
+            _shuffle_enabled = bool(payload.get("is_shuffled", False))
+            _repeat_mode = payload.get("repeat_mode") if payload.get("repeat_mode") in ("none", "one", "all") else "none"
+            _shuffle_queue = queued_ids if _shuffle_enabled else []
+            _current_shuffle_index = _shuffle_queue.index(row.id) if row.id in _shuffle_queue else -1
+        logger.info("Restored current playback metadata from one-shot release checkpoint")
+        return True
+    except Exception as exc:
+        logger.warning("Release playback checkpoint was not restored (%s)", type(exc).__name__)
+        return False
+    finally:
+        path.unlink(missing_ok=True)
+
+
 async def _build_ts_description(*, queue_preview: int = 5) -> str:
     # Snapshot playback state under lock
     async with _playback_lock:
@@ -415,7 +475,7 @@ async def _build_ts_description(*, queue_preview: int = 5) -> str:
     session = new_session()
     try:
         if cur_id:
-            cur = session.get(QueueItem, int(cur_id))
+            cur = _cleared_playing_item or session.get(QueueItem, int(cur_id))
             if cur:
                 t = (cur.title or "").strip()
                 a = (cur.artist or "").strip()
@@ -509,6 +569,7 @@ async def _take_now_playing_if_match(*, source_url: str) -> int | None:
     """If current playing source_url matches, clear it and return queue item id."""
     global _current_queue_item_id, _current_source_url, _play_started_at, _paused_at, _paused_total_s, _current_duration_ms
     global _current_artist, _current_album, _current_artwork_url
+    global _cleared_playing_item
     src = (source_url or "").strip()
     async with _playback_lock:
         if not _current_queue_item_id:
@@ -518,6 +579,7 @@ async def _take_now_playing_if_match(*, source_url: str) -> int | None:
         if src != _current_source_url:
             return None
         item_id = _current_queue_item_id
+        _cleared_playing_item = None
         _current_queue_item_id = None
         _current_source_url = ""
         _play_started_at = None
@@ -816,24 +878,38 @@ async def _delete_queue_item(item_id: int) -> None:
     _schedule_ts_description_update()
 
 
-async def _clear_queue_internal(session: Session) -> dict:
+async def _clear_queue_internal(session: Session, *, stop_playback: bool = True) -> dict:
     global _shuffle_queue, _current_shuffle_index
+    global _play_request_generation, _pending_queue_item_id, _cleared_playing_item
 
-    removed_count = int(session.execute(select(func.count(QueueItem.id))).scalar() or 0)
-    session.execute(delete(QueueItem))
-    session.commit()
-
-    _shuffle_queue = []
-    _current_shuffle_index = -1
-    await _invalidate_play_requests()
-    await _set_now_playing_queue_item(None)
+    async with _playback_lock:
+        # Synchronous transaction inside the playback lock: no async play task can
+        # slip between the delete and invalidation. Only one bulk DELETE/commit.
+        highest_id = int(session.execute(select(func.max(QueueItem.id))).scalar() or 0)
+        current = _cleared_playing_item
+        if not stop_playback and current is None and _current_queue_item_id is not None:
+            row = session.get(QueueItem, _current_queue_item_id)
+            if row is not None:
+                current = QueueItem(**{key: getattr(row, key) for key in
+                    ("id", "track_id", "title", "artist", "album", "duration", "cover_url", "source_url")})
+        reserve_cleared_queue_ids(highest_id)
+        removed_count = int(session.execute(delete(QueueItem)).rowcount or 0)
+        session.commit()
+        _shuffle_queue = []
+        _current_shuffle_index = -1
+        _play_request_generation += 1
+        _pending_queue_item_id = None
+        if not stop_playback:
+            _cleared_playing_item = current
 
     playback_stopped = False
-    try:
-        await voice.stop()
-        playback_stopped = True
-    except Exception:
-        pass
+    if stop_playback:
+        await _set_now_playing_queue_item(None)
+        try:
+            await voice.stop()
+            playback_stopped = True
+        except Exception:
+            pass
 
     _schedule_ts_description_update()
     return {"ok": True, "removed_count": removed_count, "playback_stopped": playback_stopped}
@@ -886,8 +962,8 @@ async def _auto_play_next_from_queue(*, start_after_id: int | None = None) -> No
             _current_shuffle_index = next_index
         else:
             # Regular queue order
-            cursor_id = start_after_id if start_after_id is not None else _current_queue_item_id
-            if start_after_id is None and _current_queue_item_id and _repeat_mode == "one":
+            cursor_id = start_after_id if start_after_id is not None else (None if _cleared_playing_item else _current_queue_item_id)
+            if start_after_id is None and _current_queue_item_id and not _cleared_playing_item and _repeat_mode == "one":
                 # Repeat current track
                 item_id = _current_queue_item_id
             else:
@@ -2827,7 +2903,7 @@ def _lyrics_with_translation(lrc: str, translated_lrc: str = "") -> list[LyricLi
 async def lyrics(queue_item_id: int) -> LyricsResponse:
     session = new_session()
     try:
-        item = session.get(QueueItem, queue_item_id)
+        item = _cleared_playing_item if _cleared_playing_item is not None and _cleared_playing_item.id == queue_item_id else session.get(QueueItem, queue_item_id)
         if not item:
             raise HTTPException(status_code=404, detail="not found")
         track_id = str(item.track_id or "")
@@ -4178,13 +4254,15 @@ async def _handle_chat_command(
 
 
 async def _handle_playback_finished(source_url: str) -> None:
+    detached = _cleared_playing_item is not None
     item_id = await _take_now_playing_if_match(source_url=source_url)
     if item_id is None:
         return
-    if _repeat_mode == "one":
+    if _repeat_mode == "one" and not detached:
         await _play_queue_item_internal(item_id, requested_by="auto")
         return
-    await _delete_queue_item(item_id)
+    if not detached:
+        await _delete_queue_item(item_id)
     await _auto_play_next_from_queue()
 
 
@@ -4777,8 +4855,8 @@ def get_queue(session: Session = Depends(get_session)) -> list[dict]:
 
 
 @app.delete("/queue")
-async def clear_queue(session: Session = Depends(get_session)) -> dict:
-    return await _clear_queue_internal(session)
+async def clear_queue(session: Session = Depends(get_session), stop_playback: bool = True) -> dict:
+    return await _clear_queue_internal(session, stop_playback=stop_playback)
 
 
 @app.post("/queue")
@@ -5317,8 +5395,8 @@ def external_get_queue(session: Session = Depends(get_session)) -> dict:
 
 
 @app.delete("/external/queue", tags=["External API"])
-async def external_clear_queue(session: Session = Depends(get_session)) -> dict:
-    return await clear_queue(session=session)
+async def external_clear_queue(session: Session = Depends(get_session), stop_playback: bool = True) -> dict:
+    return await clear_queue(session=session, stop_playback=stop_playback)
 
 
 @app.delete("/external/queue/{item_id}", tags=["External API"])
