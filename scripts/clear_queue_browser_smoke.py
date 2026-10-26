@@ -2,6 +2,7 @@
 """Loopback-only Chromium checks; ALL API writes are intercepted in memory."""
 import argparse
 import json
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
@@ -10,6 +11,15 @@ if __package__:
     from .ci_browser_smoke import fixture_server, SONGS
 else:
     from ci_browser_smoke import fixture_server, SONGS
+
+
+def wait_for_fixture(page, condition, description, timeout_ms=10000, now=time.monotonic):
+    """Pump Playwright until a real fixture event arrives, including on slow CI."""
+    deadline = now() + timeout_ms / 1000
+    while not condition():
+        if now() >= deadline:
+            raise AssertionError(f'Timed out waiting for {description}')
+        page.wait_for_timeout(25)
 
 
 def run_clear_checks(base_url, artifact_dir):
@@ -68,7 +78,8 @@ def run_clear_checks(base_url, artifact_dir):
                     page.screenshot(path=str(artifact_dir / f"{name}-confirm.png"))
                     confirm.click(); page.wait_for_function("document.querySelector('.queue-clear-dialog').getAttribute('aria-busy') === 'true'")
                     assert confirm.is_disabled() and cancel.is_disabled() and "正在清空" in dialog.inner_text()
-                    page.wait_for_timeout(80); assert len(held_delete) == 1 and len(writes) == 1
+                    wait_for_fixture(page, lambda: bool(held_delete), 'initial bulk clear request')
+                    assert len(held_delete) == 1 and len(writes) == 1
                     page.keyboard.press("Escape"); assert dialog.is_visible()
                     page.screenshot(path=str(artifact_dir / f"{name}-busy.png"))
                     queue[:] = [dict(SONGS[0], id=1001, title="New user's song")]
@@ -92,12 +103,16 @@ def run_clear_checks(base_url, artifact_dir):
                     mode[0] = "hold"; hold_post[0] = True
                     page.locator('[data-action="queue"]').click()
                     page.locator('.playlist-card-import[data-id="clear-test"]').click()
-                    page.wait_for_timeout(80); assert len(held_post) == 1
+                    wait_for_fixture(page, lambda: bool(held_post), 'first import request')
+                    assert len(held_post) == 1
                     trigger.click(); assert confirm.inner_text() == "停止导入并清空"
-                    confirm.click(); page.wait_for_timeout(80); assert len(held_delete) == 0
+                    confirm.click()
+                    page.wait_for_function("document.querySelector('.playlist-import-stop')?.disabled === true")
+                    assert len(held_delete) == 0
                     fulfill(held_post.pop(), {"ok": True, "id": 1002})
                     page.wait_for_function("document.querySelector('.queue-clear-dialog').getAttribute('aria-busy') === 'true'")
-                    page.wait_for_timeout(100); assert len(held_delete) == 1
+                    wait_for_fixture(page, lambda: bool(held_delete), 'bulk clear after the current import settles')
+                    assert len(held_delete) == 1
                     queue.clear(); fulfill(held_delete.pop(), {"ok": True, "removed_count": 2})
                     dialog.wait_for(state="hidden")
                     assert len([item for item in writes if item[0] == "POST"]) == 1
@@ -114,7 +129,11 @@ def run_clear_checks(base_url, artifact_dir):
                     reports.append({"profile": name, "ok": True, "checks": checks, "mock_writes": len(writes), "real_writes": 0})
                 except Exception:
                     page.screenshot(path=str(artifact_dir / f"{name}-failure.png")); raise
-                finally: context.close()
+                finally:
+                    for route in held_delete + held_post:
+                        try: route.abort('aborted')
+                        except Exception: pass  # The page may already have closed after a failure.
+                    context.close()
         finally: browser.close()
     return {"ok": True, "isolated": True, "profiles": reports}
 
