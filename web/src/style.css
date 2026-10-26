@@ -494,6 +494,33 @@ html.glass-svg-ok .vis-settings-panel {
 .playlist-empty-create { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) { #queue-panel, .playlist-card-item { transition: none; } }
 
+/* Shared QQ references stay visually and structurally separate from local favorites. */
+#queue-panel .playlist-local-label { font-size: 11px; color: rgba(255,255,255,.5); margin: 0 0 9px; font-weight: 500; }
+#queue-panel.has-shared-library .mini-queue-empty { padding: 8px; gap: 7px; }
+#queue-panel.has-shared-library .mini-queue-empty .playlist-empty-icon, #queue-panel.has-shared-library .mini-queue-empty p { display: none; }
+#queue-panel .mini-queue-list { flex-shrink: 0; }
+#queue-panel .qq-library { margin-top: 16px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,.08); }
+#queue-panel .qq-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#queue-panel .qq-library-heading h3, #queue-panel .qq-library-summary h3 { font-size: 13px; font-weight: 500; color: rgba(255,255,255,.9); line-height: 1.6; overflow-wrap: anywhere; }
+#queue-panel .qq-library-heading p, #queue-panel .qq-library-summary p { font-size: 10px; line-height: 1.7; color: rgba(255,255,255,.45); margin-top: 3px; }
+#queue-panel .qq-library-status, #queue-panel .qq-library-notice { font-size: 11px; line-height: 1.7; color: rgba(255,255,255,.5); padding: 8px 0; overflow-wrap: anywhere; }
+#queue-panel .qq-library-cards { display: flex; flex-direction: column; gap: 6px; }
+#queue-panel .qq-library-card { border-radius: 12px; padding: 5px; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.06); }
+#queue-panel .qq-library-card:hover { background: rgba(255,255,255,.055); }
+#queue-panel .qq-library-card > button { width: 100%; }
+#queue-panel .qq-library-detail { display: flex; flex-direction: column; min-height: 0; overflow: auto; gap: 8px; }
+#queue-panel .qq-library-summary { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+#queue-panel .qq-library-summary > div { min-width: 0; }
+#queue-panel .qq-library-operations { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+#queue-panel .qq-library-partial { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; line-height: 1.7; color: #dec693; padding: 10px; border-radius: 9px; background: rgba(220,170,75,.07); }
+#queue-panel .qq-library-partial input { margin-top: 4px; flex-shrink: 0; accent-color: #85c6b2; }
+#queue-panel .qq-library-tracks { min-height: 80px; overflow: auto; overscroll-behavior: contain; }
+#queue-panel .qq-library-track { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: 10px; color: rgba(255,255,255,.4); }
+#queue-panel .qq-library-track > div { flex: 1; min-width: 0; }
+#queue-panel .qq-library-track strong, #queue-panel .qq-library-track small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+#queue-panel .qq-library-track strong { color: rgba(255,255,255,.85); font-size: 12px; margin-bottom: 4px; }
+@media (pointer: coarse) { #queue-panel .qq-library button, #queue-panel .qq-library-detail button { min-height: 44px; } #queue-panel .qq-library .playlist-icon-btn { width: 44px; } }
+
 /* Override old queue panel styles */
 .queue-panel-inner, .queue-header, .queue-header h3, .queue-list, .queue-item,
 .qi-index, .qi-info, .qi-title, .qi-artist, .qi-duration, .qi-remove, .queue-empty, .queue-close { all: unset; display: none; }

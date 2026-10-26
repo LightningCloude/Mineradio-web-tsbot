@@ -1,5 +1,6 @@
 import { state } from './shared/StateManager.js';
 import { eventBus } from './shared/EventBus.js';
+import { qqLibrary } from './shared/QQLibraryManager.js';
 import { wsClient } from './core/WsClient.js';
 import { api } from './core/ApiClient.js';
 import { beatEngine } from './core/BeatEngine.js';
@@ -179,6 +180,7 @@ function init() {
   cookieContainer.id = 'cookie-overlay';
   document.getElementById('app').appendChild(cookieContainer);
   const cookieView = new CookieView(cookieContainer);
+  qqLibrary.start();
 
   new AudioPermissionReminder({ capture: localAudioCapture, bus: eventBus });
   new VisualSettings(visSettingsContainer, particleStage, localAudioCapture);

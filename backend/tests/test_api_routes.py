@@ -183,6 +183,39 @@ class ApiRouteIntegrationTests(unittest.TestCase):
         self.assertEqual(cookie_status.status_code, 200)
         self.assertEqual(settings_response.status_code, 200)
 
+    def test_shared_library_reads_saved_credentials_without_changing_player_client(self):
+        payload = {"status": "ready", "account_id": "opaque", "account_version": "a" * 32, "items": []}
+        with patch.object(main, "_shared_qq_cookie", return_value="fixture-cookie"), patch.object(main, "_check_qq_library_snapshot"), patch.object(main.qq_library, "directory", AsyncMock(return_value=payload)) as read, patch.object(main.qqmusic, "set_cookie") as mutate:
+            result = self.client.get("/qqmusic/library?refresh=true", headers={"Authorization": "Bearer test-api-token"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json(), payload)
+        self.assertEqual(result.headers["Cache-Control"], "private, no-store")
+        read.assert_awaited_once_with("fixture-cookie", main.settings.cookie_key, True)
+        mutate.assert_not_called()
+
+    def test_shared_library_domain_errors_do_not_prompt_api_token(self):
+        from backend.qq_library import LibraryError
+        for status in ("expired", "unconfigured", "account_changed"):
+            with patch.object(main, "_shared_qq_cookie", return_value="fixture"), patch.object(main.qq_library, "directory", AsyncMock(side_effect=LibraryError(status))):
+                result = self.client.get("/qqmusic/library", headers={"Authorization": "Bearer test-api-token"})
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json()["status"], status)
+
+    def test_shared_detail_validates_identifier_version_and_late_account_change(self):
+        from backend.qq_library import LibraryError
+        headers = {"Authorization": "Bearer test-api-token"}
+        self.assertEqual(self.client.get("/qqmusic/library/playlists/not-a-number?account_version=bad", headers=headers).status_code, 400)
+        with patch.object(main, "_shared_qq_cookie", return_value="fixture"), patch.object(main.qq_library, "detail", AsyncMock(return_value={"status": "ready"})), patch.object(main, "_check_qq_library_snapshot", side_effect=LibraryError("account_changed")):
+            result = self.client.get("/qqmusic/library/playlists/99?account_version=" + "a" * 32, headers=headers)
+        self.assertEqual(result.json(), {"status": "account_changed"})
+
+    def test_legacy_login_status_never_returns_raw_cookie(self):
+        with patch.object(main.qqmusic, "get_cookie", return_value="MUST_NOT_RETURN"), patch.object(main.qqmusic, "refresh_login", AsyncMock(return_value={"success": True, "message": "valid"})):
+            result = self.client.get("/qqmusic/login/status", headers={"Authorization": "Bearer test-api-token"})
+        self.assertTrue(result.json()["logged_in"])
+        self.assertNotIn("cookie", result.json())
+        self.assertNotIn("MUST_NOT_RETURN", result.text)
+
     def test_websocket_requires_and_accepts_api_token_protocol(self):
         with self.assertRaises(WebSocketDisconnect) as rejected:
             with self.client.websocket_connect("/ws/status") as websocket:

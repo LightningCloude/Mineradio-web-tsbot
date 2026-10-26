@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired backend/Web release for keep-playing queue clear; voice is never replaced.
+"""Paired backend/Web source release with playback checkpoint; voice is never replaced.
 
 Defaults to read-only discovery. Uses the installed backend image as an immutable
 base, retaining dependencies. Private runtime files never enter the build context.
@@ -120,7 +120,7 @@ sudo docker tag {q(base_id)} {q(base_tag)}
 [ "$(sudo docker image inspect --format '{{{{.Id}}}}' {q(base_tag)})" = {q(base_id)} ]
 sudo docker build --pull=false --build-arg {q('BASE_IMAGE=' + base_tag)} -f Dockerfile.backend-update -t {q(backend_image)} .
 sudo docker build --pull=false -f Dockerfile.web-dist -t {q(web_image)} .
-sudo docker run --rm --network none --entrypoint python {q(backend_image)} -m unittest backend.tests.test_clear_queue -v
+sudo docker run --rm --network none --entrypoint python {q(backend_image)} -m unittest backend.tests.test_clear_queue backend.tests.test_qq_library backend.tests.test_api_routes -v
 sudo docker run -d --rm --name "$probe" --network {q(state.network)} -p 127.0.0.1::8080 {q(web_image)} >/dev/null
 ready=0
 for attempt in $(seq 1 30); do

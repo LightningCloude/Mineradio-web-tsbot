@@ -912,7 +912,7 @@ class QQMusicClient:
         
         return await self._post(url, json.dumps(body))
 
-    async def get_user_playlists(self) -> dict[str, Any]:
+    async def get_user_playlists(self, offset: int = 0, limit: int = 200) -> dict[str, Any]:
         """获取用户歌单"""
         if not self._cookie or not self._uin:
             raise Exception("未设置 Cookie 或 UIN，请先登录")
@@ -920,8 +920,8 @@ class QQMusicClient:
         url = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss"
         params = {
             "hostuin": self._uin,
-            "sin": "0",
-            "size": "200",
+            "sin": str(max(0, offset)),
+            "size": str(min(200, max(1, limit))),
             "g_tk": self._get_gtk(),
             "loginUin": self._uin,
             "hostUin": "0",

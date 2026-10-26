@@ -135,6 +135,7 @@ export class CookieView {
     this._persistTokens();
     try {
       await api.saveQQCookie(cookie);
+      eventBus.emit('qq:credentials-changed', { cleared: false });
       eventBus.emit('toast', { message: 'Cookie 已保存', level: 'success' });
       await this._loadStatus();
     } catch (e) { /* toast handled by api */ }
@@ -144,6 +145,8 @@ export class CookieView {
     this._persistTokens();
     try {
       await api.clearQQCookie();
+      state.updateAuth({ qqLoggedIn: false });
+      eventBus.emit('qq:credentials-changed', { cleared: true });
       this.container.querySelector('.cookie-input').value = '';
       eventBus.emit('toast', { message: 'Cookie 已清除', level: 'info' });
       await this._loadStatus();

@@ -108,6 +108,7 @@ export class LoginView {
           return;
         }
         state.updateAuth({ qqLoggedIn: true });
+        eventBus.emit('qq:credentials-changed', { cleared: false });
         this.hide();
         eventBus.emit('toast', { message: 'QQ音乐登录成功', level: 'success' });
         return;

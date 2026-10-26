@@ -42,6 +42,8 @@ class PairedDeploymentTests(unittest.TestCase):
         self.assertIn('trap cleanup EXIT', script)
         self.assertIn('source.backup(target)', script)
         self.assertIn('TSBOT_RELEASE_PLAYBACK_CHECKPOINT', script)
+        self.assertIn('backend.tests.test_qq_library', script)
+        self.assertIn('backend.tests.test_api_routes', script)
         self.assertIn('Current track metadata was not restored', script)
         self.assertNotIn('up -d --no-deps voice-service', script)
         self.assertNotIn('/external/queue', script)

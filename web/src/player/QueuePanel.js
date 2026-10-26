@@ -5,6 +5,8 @@ import { api } from '../core/ApiClient.js';
 import { playlistManager } from '../shared/PlaylistManager.js';
 import { playlistImporter } from './PlaylistImporter.js';
 import { queueMutationGate } from '../core/QueueMutationGate.js';
+import { qqLibrary } from '../shared/QQLibraryManager.js';
+import { SharedLibraryView } from './SharedLibraryView.js';
 
 const icon = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const icons = {
@@ -18,7 +20,7 @@ const icons = {
 
 /** Local playlists and sequential queue import; navigation never controls playback. */
 export class QueuePanel {
-  constructor(container, { apiClient = api, playlists = playlistManager, stateManager = state, bus = eventBus, importer = playlistImporter } = {}) {
+  constructor(container, { apiClient = api, playlists = playlistManager, stateManager = state, bus = eventBus, importer = playlistImporter, library = qqLibrary } = {}) {
     this.container = container;
     this._api = apiClient;
     this._playlists = playlists;
@@ -30,6 +32,8 @@ export class QueuePanel {
     this._view = 'list';
     this._importResult = null;
     this._buildDOM();
+    this._sharedLibrary = new SharedLibraryView(container, { library, playlists, importer, bus,
+      onNavigate: view => this._showView(view), onImport: () => this._showView('import') });
     this._unsubscribeImport = importer.subscribe(() => this._syncImport());
     this._unsubscribeQueueGate = queueMutationGate.subscribe(() => this._render());
     bus.on('ui:changed', (ui) => {
@@ -40,6 +44,7 @@ export class QueuePanel {
         this.container.classList.add('show');
         if (!wasOpen && !this._importing) this._showView('list');
         this._render();
+        if (!wasOpen) void library.refresh();
       } else {
         this.container.classList.remove('show');
       }
@@ -90,6 +95,7 @@ export class QueuePanel {
         </div>
       </div>
       <section class="playlist-library">
+        <h3 class="playlist-local-label">本地歌单</h3>
         <div class="mini-queue-list" id="playlist-card-list"></div>
         <div class="mini-queue-empty">
           <span class="playlist-empty-icon">${icons.music}</span>
@@ -98,8 +104,10 @@ export class QueuePanel {
           <button type="button" class="playlist-empty-create playlist-primary-btn">新建第一个歌单</button>
         </div>
         <p class="playlist-library-hint">选择歌单，将歌曲按顺序导入播放队列</p>
+        <section class="qq-library" aria-label="共享 QQ 账号歌单"></section>
         <button type="button" class="playlist-import-resume" hidden></button>
       </section>
+      <section class="qq-library-detail" aria-label="共享歌单详情" hidden></section>
       <div class="playlist-paste-area" hidden>
         <label for="playlist-paste-name">歌单名称</label>
         <input id="playlist-paste-name" class="playlist-paste-name" placeholder="例如：晚间循环" maxlength="50" />
@@ -143,29 +151,41 @@ export class QueuePanel {
     listen('.playlist-paste-confirm', () => this._createPlaylist());
     this.container.querySelector('.playlist-paste-input').addEventListener('input', () => this._updateDraftCount());
     this.container.addEventListener('keydown', (event) => {
-      if (event.key === ' ' || event.code === 'Space') event.stopPropagation();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (this._state.ui.queueOpen) this._state.toggleUI('queueOpen');
+        document.querySelector('[data-action="queue"]')?.focus({ preventScroll: true });
+      }
     });
     this._showView('list');
   }
 
   _showView(view) {
-    if (!['list', 'create', 'import'].includes(view)) return;
+    if (!['list', 'create', 'import', 'shared'].includes(view)) return;
+    const previousView = this._view;
     this._view = view;
     this.container.querySelector('.playlist-library').hidden = view !== 'list';
     this.container.querySelector('.playlist-paste-area').hidden = view !== 'create';
     this.container.querySelector('.playlist-import-view').hidden = view !== 'import';
+    this.container.querySelector('.qq-library-detail').hidden = view !== 'shared';
     this.container.querySelector('.mini-queue-back').hidden = view === 'list';
     this.container.querySelector('.mini-queue-paste').hidden = view === 'create';
     this._updateHeading();
     if (view === 'list') this._render();
+    if (view === 'list' && previousView === 'shared') {
+      this.container.querySelector('.playlist-library').scrollTop = this._sharedLibrary?._listScroll || 0;
+      this.container.querySelector(`[data-qq-id="${this._sharedLibrary?._selectedId || ''}"]`)?.focus({ preventScroll: true });
+    }
+    if (view === 'shared') this.container.querySelector('.mini-queue-back').focus({ preventScroll: true });
   }
 
   _updateHeading() {
-    const titles = { list: '我的歌单', create: '新建歌单', import: this._importing ? '正在导入' : '导入结果' };
+    const titles = { list: '我的歌单', create: '新建歌单', shared: '共享歌单详情', import: this._importing ? '正在导入' : '导入结果' };
     this.container.querySelector('.mini-queue-title').textContent = titles[this._view];
     this.container.querySelector('.mini-queue-count').textContent = this._view === 'list'
       ? `${this._playlists.playlists.length} 个歌单 · 保存在此浏览器`
-      : (this._view === 'create' ? '粘贴歌曲名称，保存你的音乐收藏' : this._importResult?.name || '');
+      : (this._view === 'shared' ? '只读同步 · 不修改 QQ 音乐歌单' : this._view === 'create' ? '粘贴歌曲名称，保存你的音乐收藏' : this._importResult?.name || '');
   }
 
   _updateDraftCount() {

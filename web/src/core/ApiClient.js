@@ -122,6 +122,15 @@ export function createApiClient({
       return request('GET', `/qqmusic/playlist/${encodeURIComponent(id)}`, null, options);
     },
 
+    getQQLibrary(options = {}) {
+      return request('GET', `/qqmusic/library${options.refresh ? '?refresh=true' : ''}`, null, { timeoutMs: 45000, ...options });
+    },
+
+    getQQLibraryPlaylist(id, version, options = {}) {
+      if (!/^\d+$/.test(String(id))) return Promise.reject(new Error('歌单 ID 无效'));
+      return request('GET', `/qqmusic/library/playlists/${encodeURIComponent(id)}?account_version=${encodeURIComponent(version)}`, null, { timeoutMs: 45000, ...options });
+    },
+
     getQueue(options = {}) {
       return request('GET', '/external/queue', null, options);
     },

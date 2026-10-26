@@ -60,6 +60,10 @@ def create_app(dist: Path) -> FastAPI:
     async def cookie_status():
         return {"admin_cookie_set": False, "cookie_set": False}
 
+    @app.get("/api/qqmusic/library")
+    async def shared_library():
+        return {"status": "unconfigured", "items": []}
+
     @app.get("/api/config/public")
     async def public_config():
         return {"require_api_auth": False, "require_admin_auth": False}
@@ -147,7 +151,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             from clear_queue_browser_smoke import run_clear_checks
         clear_report = run_clear_checks(base_url, arguments.report.parent / "clear-queue")
-    result = {"ok": all(report["ok"] for report in reports) and playlist_report["ok"] and search_report["ok"] and clear_report["ok"], "isolated_readonly": True, "profiles": reports, "playlist_navigation": playlist_report, "search_playlists": search_report, "clear_queue": clear_report}
+        if __package__:
+            from .qq_library_browser_smoke import run_library_checks
+        else:
+            from qq_library_browser_smoke import run_library_checks
+        library_report = run_library_checks(base_url, arguments.report.parent / "qq-library")
+    result = {"ok": all(report["ok"] for report in reports) and playlist_report["ok"] and search_report["ok"] and clear_report["ok"] and library_report["ok"], "isolated_readonly": True, "profiles": reports, "playlist_navigation": playlist_report, "search_playlists": search_report, "clear_queue": clear_report, "qq_library": library_report}
     arguments.report.parent.mkdir(parents=True, exist_ok=True)
     arguments.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))

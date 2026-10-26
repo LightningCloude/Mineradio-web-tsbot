@@ -65,6 +65,7 @@ from .managed_assets import ASSET_BY_KEY, asset_path, asset_payload, delete_asse
 from .netease import NeteaseClient
 from .netease_cookie import extract_netease_auth_cookie, has_netease_auth_cookie
 from .qqmusic import QQMusicClient
+from .qq_library import SharedQQLibrary, LibraryError, fingerprint as qq_library_fingerprint
 from .voice_client import VoiceClient, VoiceStatus
 from .config import settings
 from .logger import logger
@@ -96,6 +97,7 @@ app.add_middleware(
 
 netease = NeteaseClient()
 qqmusic = QQMusicClient()
+qq_library = SharedQQLibrary()
 voice = VoiceClient()
 app.include_router(public_router)
 app.include_router(create_readiness_router(voice))
@@ -364,6 +366,7 @@ async def _shutdown() -> None:
     _chat_task = _ws_position_task = _ts_desc_task = None
     await ws_manager.close()
     await close_all_bilibili_qr_sessions()
+    await qq_library.close()
     await voice.close()
 
 
@@ -5907,7 +5910,6 @@ async def qqmusic_login_status() -> dict:
             "logged_in": refresh_result["success"],
             "message": refresh_result["message"],
             "uin": qqmusic.get_uin(),
-            "cookie": qqmusic.get_cookie()
         }
     except Exception as e:
         return {"logged_in": False, "message": str(e)}
@@ -5929,6 +5931,62 @@ async def qqmusic_user_playlists() -> dict:
         return await qqmusic.get_user_playlists()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _shared_qq_cookie(session: Session) -> str:
+    row = session.get(Secret, "qqmusic_cookie")
+    if not row or not row.value:
+        return ""
+    return decrypt_text(row.value).strip()
+
+
+def _check_qq_library_snapshot(cookie: str) -> None:
+    # A fresh session sees changes committed while an upstream HTTP read was in flight.
+    with new_session() as fresh:
+        if _shared_qq_cookie(fresh) != cookie:
+            raise LibraryError("account_changed")
+
+
+@app.get("/qqmusic/library")
+async def qqmusic_library_directory(response: Response, refresh: bool = False, session: Session = Depends(get_session)) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    cookie = ""
+    try:
+        cookie = _shared_qq_cookie(session)
+        result = await qq_library.directory(cookie, settings.cookie_key, refresh)
+        _check_qq_library_snapshot(cookie)
+        return result
+    except LibraryError as exc:
+        return {"status": exc.status, "items": []}
+    except Exception:
+        logger.warning("Shared QQ library directory unavailable")
+        # Identifies only the currently saved credential snapshot, not its validity.
+        # A browser may display its matching cache as stale, never as a successful login.
+        try:
+            _check_qq_library_snapshot(cookie)
+            account, version, _ = qq_library_fingerprint(cookie, settings.cookie_key)
+            return {"status": "unavailable", "items": [], "account_id": account, "account_version": version}
+        except LibraryError as exc:
+            return {"status": exc.status, "items": []}
+        except Exception:
+            return {"status": "unavailable", "items": []}
+
+
+@app.get("/qqmusic/library/playlists/{playlist_id}")
+async def qqmusic_library_detail(playlist_id: str, account_version: str, response: Response, session: Session = Depends(get_session)) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    if not playlist_id.isdigit() or len(playlist_id) > 30 or not re.fullmatch(r"[a-f0-9]{32}", account_version):
+        raise HTTPException(status_code=400, detail="Invalid library identifier")
+    try:
+        cookie = _shared_qq_cookie(session)
+        result = await qq_library.detail(cookie, settings.cookie_key, playlist_id, account_version)
+        _check_qq_library_snapshot(cookie)
+        return result
+    except LibraryError as exc:
+        return {"status": exc.status}
+    except Exception:
+        logger.warning("Shared QQ library detail unavailable")
+        return {"status": "unavailable"}
 
 
 @app.post("/qqmusic/login/refresh")
