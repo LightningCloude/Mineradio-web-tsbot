@@ -159,6 +159,10 @@ export function createApiClient({
       return request('POST', '/external/player/action', { action });
     },
 
+    setPlaybackMode(mode, options = {}) {
+      return request('POST', '/external/player/mode', { mode }, options);
+    },
+
     setVolume(volume) {
       return request('PUT', '/voice/volume', { volume_percent: volume });
     },

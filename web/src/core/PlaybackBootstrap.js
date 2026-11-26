@@ -5,6 +5,7 @@ export function bootstrapPlayback({ apiClient, stateManager, bus }) {
 
   const statusTask = apiClient.getStatus({ silent: true }).then(status => {
     if (stateManager.playback !== playback || !status) return false;
+    if (status.playback_mode) bus.emit('playback:mode', status.playback_mode);
     if (status.volume_percent != null && Number.isFinite(Number(status.volume_percent))) {
       bus.emit('volume:changed', Number(status.volume_percent));
     }

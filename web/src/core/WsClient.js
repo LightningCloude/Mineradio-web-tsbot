@@ -99,6 +99,7 @@ export class WsClient {
     switch (msg.type) {
       case 'started':
       case 'progress': {
+        if (msg.playback_mode) this._bus.emit('playback:mode', msg.playback_mode);
         const previousSong = this._state.playback.song;
         let song = inheritSongAudioSource(
           msg.song || previousSong || {},

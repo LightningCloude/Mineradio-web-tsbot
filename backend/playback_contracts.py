@@ -25,6 +25,7 @@ def build_ws_progress_payload(status: dict[str, Any]) -> dict[str, Any]:
         "state": status["state"],
         "position": status["current_time"],
         "duration": status["duration"],
+        "playback_mode": status.get("playback_mode"),
         "song": {
             "track_id": track_id,
             "queue_id": track_id,

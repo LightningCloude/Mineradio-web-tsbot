@@ -156,7 +156,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             from qq_library_browser_smoke import run_library_checks
         library_report = run_library_checks(base_url, arguments.report.parent / "qq-library")
-    result = {"ok": all(report["ok"] for report in reports) and playlist_report["ok"] and search_report["ok"] and clear_report["ok"] and library_report["ok"], "isolated_readonly": True, "profiles": reports, "playlist_navigation": playlist_report, "search_playlists": search_report, "clear_queue": clear_report, "qq_library": library_report}
+        if __package__:
+            from .playback_mode_browser_smoke import run_mode_checks
+        else:
+            from playback_mode_browser_smoke import run_mode_checks
+        mode_report = run_mode_checks(base_url, arguments.report.parent / "playback-modes")
+    result = {"ok": all(report["ok"] for report in reports) and playlist_report["ok"] and search_report["ok"] and clear_report["ok"] and library_report["ok"] and mode_report["ok"], "isolated_readonly": True, "profiles": reports, "playlist_navigation": playlist_report, "search_playlists": search_report, "clear_queue": clear_report, "qq_library": library_report, "playback_modes": mode_report}
     arguments.report.parent.mkdir(parents=True, exist_ok=True)
     arguments.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))

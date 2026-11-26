@@ -956,10 +956,9 @@ async def _auto_play_next_from_queue(*, start_after_id: int | None = None) -> No
             next_index = _current_shuffle_index + 1
             
             if next_index >= len(_shuffle_queue):
-                if _repeat_mode == "all":
-                    next_index = 0
-                else:
-                    return  # End of shuffled queue
+                # Played items are removed in shuffle mode. If a manual jump
+                # left unplayed items before the cursor, finish those as well.
+                next_index = 0
             
             item_id = _shuffle_queue[next_index]
             _current_shuffle_index = next_index
@@ -2467,6 +2466,7 @@ async def voice_status() -> dict:
         "volume_percent": st.volume_percent,
         "is_shuffled": _shuffle_enabled,
         "repeat_mode": _repeat_mode,
+        "playback_mode": _selected_playback_mode(),
         "voice_connected": voice_connected,
         "voice_config_revision": st.config_revision,
     }
@@ -2554,7 +2554,6 @@ async def voice_pause() -> dict:
 
 @app.post("/voice/next")
 async def voice_next() -> dict:
-    global _current_shuffle_index, _shuffle_queue
     current_item_id = None
     pending_item_id = None
     async with _playback_lock:
@@ -2563,34 +2562,15 @@ async def voice_next() -> dict:
 
     active_item_id = current_item_id or pending_item_id
 
-    if active_item_id:
+    # Next must not consume a looping playlist; explicit Skip still removes it.
+    if active_item_id and _repeat_mode != "all":
         await _remove_queue_item_internal(active_item_id)
     await _invalidate_play_requests()
 
-    if _shuffle_enabled and _shuffle_queue:
-        # Handle shuffled next
-        next_index = _current_shuffle_index + 1
-        
-        if next_index >= len(_shuffle_queue):
-            if _repeat_mode == "all":
-                next_index = 0
-            else:
-                await _set_now_playing_queue_item(None)
-                await voice.skip()
-                return {"ok": True, "action": "end_of_queue"}
-        
-        item_id = _shuffle_queue[next_index]
-        _current_shuffle_index = next_index
-        
-        await _play_queue_item_internal(item_id, requested_by="next")
-        return {"ok": True, "action": "play_shuffled_next"}
-    else:
-        # Regular next behavior - just play next without removing current
-        start_after_id = active_item_id
-        await _set_now_playing_queue_item(None)
-        await voice.skip()
-        await _auto_play_next_from_queue(start_after_id=start_after_id)
-        return {"ok": True, "action": "next"}
+    await _set_now_playing_queue_item(None)
+    await voice.skip()
+    await _auto_play_next_from_queue(start_after_id=active_item_id)
+    return {"ok": True, "action": "next"}
 
 
 @app.post("/voice/skip")
@@ -2727,27 +2707,22 @@ class ShuffleRequest(BaseModel):
 async def _set_shuffle_enabled(enabled: bool) -> dict:
     global _shuffle_enabled, _shuffle_queue, _current_shuffle_index
 
+    shuffled = []
+    index = -1
+    if enabled:
+        with new_session() as session:
+            shuffled = list(session.execute(select(QueueItem.id).order_by(QueueItem.id.asc())).scalars())
+        current = _current_queue_item_id or _pending_queue_item_id
+        if current in shuffled:
+            shuffled.remove(current)
+            random.shuffle(shuffled)
+            shuffled.insert(0, current)
+            index = 0
+        else:
+            random.shuffle(shuffled)
     _shuffle_enabled = bool(enabled)
-
-    if _shuffle_enabled:
-        session = new_session()
-        try:
-            queue_items = session.execute(select(QueueItem).order_by(QueueItem.id.asc())).scalars().all()
-            _shuffle_queue = [int(item.id) for item in queue_items]
-            random.shuffle(_shuffle_queue)
-
-            if _current_queue_item_id:
-                try:
-                    _current_shuffle_index = _shuffle_queue.index(_current_queue_item_id)
-                except ValueError:
-                    _current_shuffle_index = -1
-            else:
-                _current_shuffle_index = -1
-        finally:
-            session.close()
-    else:
-        _shuffle_queue = []
-        _current_shuffle_index = -1
+    _shuffle_queue = shuffled
+    _current_shuffle_index = index
 
     _schedule_ts_description_update()
     return {"ok": True, "enabled": _shuffle_enabled}
@@ -2773,6 +2748,31 @@ async def voice_repeat(req: RepeatRequest) -> dict:
     
     _schedule_ts_description_update()
     return {"ok": True, "mode": _repeat_mode}
+
+
+def _selected_playback_mode() -> str:
+    if _repeat_mode == "one":
+        return "repeat_one"
+    if _shuffle_enabled:
+        return "shuffle"
+    return "repeat_all" if _repeat_mode == "all" else "order"
+
+
+class PlaybackModeRequest(BaseModel):
+    mode: str
+
+
+@app.post("/external/player/mode", tags=["External API"])
+async def external_set_playback_mode(req: PlaybackModeRequest) -> dict:
+    global _repeat_mode
+    repeat = {"order": "none", "shuffle": "none", "repeat_one": "one", "repeat_all": "all"}
+    if req.mode not in repeat:
+        raise HTTPException(status_code=400, detail="invalid playback mode")
+    async with _playback_lock:
+        if _selected_playback_mode() != req.mode or _shuffle_enabled != (req.mode == "shuffle") or _repeat_mode != repeat[req.mode]:
+            await _set_shuffle_enabled(req.mode == "shuffle")
+            _repeat_mode = repeat[req.mode]
+        return {"ok": True, "playback_mode": _selected_playback_mode()}
 
 
 @app.get("/search", response_model=SearchResponse)
@@ -4263,6 +4263,9 @@ async def _handle_playback_finished(source_url: str) -> None:
         return
     if _repeat_mode == "one" and not detached:
         await _play_queue_item_internal(item_id, requested_by="auto")
+        return
+    if _repeat_mode == "all" and not detached:
+        await _auto_play_next_from_queue(start_after_id=item_id)
         return
     if not detached:
         await _delete_queue_item(item_id)

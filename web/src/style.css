@@ -758,6 +758,38 @@ html.immersive-mode #connection-bar { display: none !important; opacity: 0 !impo
 .lyric-3d-canvas { opacity: 0.7; }
 }
 
+/* Shared playback mode selector */
+.playback-mode-dialog {
+  position: fixed; inset: 0; margin: auto; box-sizing: border-box;
+  width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+  overflow: auto; padding: 18px; border: 1px solid rgba(255,255,255,.14);
+  border-radius: 19px; color: var(--text-primary);
+  background: linear-gradient(145deg, #15191f, #080a0f);
+  box-shadow: 0 24px 70px rgba(0,0,0,.55);
+}
+.playback-mode-dialog::backdrop { background: rgba(0,0,0,.45); }
+.playback-mode-dialog header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.playback-mode-dialog h2 { font-size: 17px; }
+.playback-mode-note, .playback-mode-feedback { color: var(--text-secondary); font-size: 11px; margin: 8px 0; line-height: 1.6; }
+.playback-mode-feedback:empty { display: none; }
+.playback-mode-option {
+  display: flex; align-items: center; text-align: left; gap: 12px; min-height: 54px; width: 100%;
+  margin-top: 6px; padding: 8px 11px; border-radius: 11px;
+  border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.035);
+  color: inherit; font: inherit; cursor: pointer;
+}
+.playback-mode-option:hover { background: rgba(255,255,255,.08); }
+.playback-mode-option:focus-visible, .playback-mode-dialog [data-mode-close]:focus-visible { outline: 2px solid var(--accent-mint); outline-offset: 1px; }
+.playback-mode-option:disabled { opacity: .6; cursor: wait; }
+.playback-mode-option[aria-pressed="true"] { color: var(--accent-mint); background: rgba(156,255,223,.08); border-color: rgba(156,255,223,.25); }
+.playback-mode-option svg { width: 19px; height: 19px; flex-shrink: 0; }
+.playback-mode-option strong, .playback-mode-option small { display: block; }
+.playback-mode-option strong { font-size: 13px; }
+.playback-mode-option small { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.playback-mode-check { margin-left: auto; visibility: hidden; }
+.playback-mode-option[aria-pressed="true"] .playback-mode-check { visibility: visible; }
+.ctrl-btn[data-action="playback-mode"]:not([data-mode="order"]) { color: var(--accent-mint); }
+
 /* Destructive queue action: scoped black glass, native modal focus/inert boundary. */
 .queue-clear-dialog {
   position: fixed; inset: 0; margin: auto;

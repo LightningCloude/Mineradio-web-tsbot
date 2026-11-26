@@ -194,14 +194,23 @@ def check_safe_panels(page, timeout_ms: int) -> str:
 
 def check_control_accessibility(page, timeout_ms: int) -> str:
     controls = page.locator('.player-bar button[data-action]')
-    if controls.count() != 10:
-        raise SmokeFailure(f"expected 10 unchanged button actions, found {controls.count()}")
+    expected = {"prev", "play", "skip", "playback-mode", "search", "queue", "cookie", "vis-settings", "shelf", "immersive", "clear-queue"}
+    if {control.get_attribute("data-action") for control in controls.all()} != expected or controls.count() != len(expected):
+        raise SmokeFailure(f"expected all 11 playback controls, found {controls.count()}")
     viewport = page.viewport_size
     for control in controls.all():
         box = control.bounding_box()
         if not box or box["x"] < -1 or box["y"] < -1 or box["x"] + box["width"] > viewport["width"] + 1 or box["y"] + box["height"] > viewport["height"] + 1:
             raise SmokeFailure(f"button outside viewport: {control.get_attribute('data-action')}")
-    return "all 10 existing controls fit inside the viewport"
+    trigger = page.locator('[data-action="playback-mode"]')
+    trigger.click(timeout=timeout_ms)
+    dialog = page.locator('#playback-mode-dialog')
+    dialog.wait_for(state='visible', timeout=timeout_ms)
+    if dialog.locator('[data-mode]').count() != 4 or dialog.locator('[aria-pressed="true"]').count() != 1:
+        raise SmokeFailure("playback mode selection is incomplete")
+    page.keyboard.press("Escape")
+    dialog.wait_for(state='hidden', timeout=timeout_ms)
+    return "all 11 controls fit; playback mode dialog opens with one selection and closes without writes"
 
 
 def validate_audio_source_observation(observation: dict[str, Any]) -> str:

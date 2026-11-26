@@ -146,6 +146,80 @@ class ClearQueueTests(unittest.IsolatedAsyncioTestCase):
             play.assert_not_awaited()
         self.assertIsNone(main._current_queue_item_id)
 
+    async def test_list_loop_preserves_queue_and_wraps_after_last_song(self):
+        ids = self.seed(3)
+        main._repeat_mode = "all"
+        for current, expected in ((ids[0], ids[1]), (ids[-1], ids[0])):
+            await self.start_current(current)
+            with patch.object(main, "_play_queue_item_internal", AsyncMock(return_value=True)) as play:
+                await main._handle_playback_finished("https://fixture/current")
+                play.assert_awaited_once_with(expected, requested_by="auto")
+        with self.sessions() as session:
+            self.assertEqual(list(session.execute(select(models.QueueItem.id).order_by(models.QueueItem.id)).scalars()), ids)
+
+    async def test_order_consumes_each_song_and_stops_on_empty_queue(self):
+        ids = self.seed(2)
+        for index, current in enumerate(ids):
+            await self.start_current(current)
+            with patch.object(main, "_play_queue_item_internal", AsyncMock(return_value=True)) as play:
+                await main._handle_playback_finished("https://fixture/current")
+                if index == 0:
+                    play.assert_awaited_once_with(ids[1], requested_by="auto")
+                else:
+                    play.assert_not_awaited()
+        with self.sessions() as session:
+            self.assertEqual(list(session.execute(select(models.QueueItem.id)).scalars()), [])
+
+    async def test_switching_to_shuffle_keeps_current_and_visits_all_remaining(self):
+        ids = self.seed(4)
+        current = ids[2]
+        await self.start_current(current, paused=True)
+        before = await main.voice_status()
+        with patch.object(main.random, "shuffle", side_effect=lambda items: items.reverse()) as shuffle:
+            result = await main.external_set_playback_mode(main.PlaybackModeRequest(mode="shuffle"))
+            self.assertEqual(result["playback_mode"], "shuffle")
+            self.assertEqual(main._shuffle_queue, [current, ids[3], ids[1], ids[0]])
+            await main.external_set_playback_mode(main.PlaybackModeRequest(mode="shuffle"))
+            shuffle.assert_called_once()
+        after = await main.voice_status()
+        self.assertEqual(after["track_id"], before["track_id"])
+        self.assertEqual(after["state"], "paused")
+        self.assertEqual(after["current_time"], before["current_time"])
+        self.assertEqual(main.build_ws_progress_payload(after)["playback_mode"], "shuffle")
+        for current, following in ((current, ids[3]), (ids[3], ids[1]), (ids[1], ids[0]), (ids[0], None)):
+            await self.start_current(current)
+            with patch.object(main, "_play_queue_item_internal", AsyncMock(return_value=True)) as play:
+                await main._handle_playback_finished("https://fixture/current")
+                if following is None:
+                    play.assert_not_awaited()
+                else:
+                    play.assert_awaited_once_with(following, requested_by="auto")
+
+    async def test_next_keeps_looping_list_but_manual_skip_removes(self):
+        ids = self.seed(2)
+        main._repeat_mode = "all"
+        await self.start_current(ids[-1])
+        with patch.object(main.voice, "skip", AsyncMock()), patch.object(main, "_play_queue_item_internal", AsyncMock(return_value=True)) as play:
+            await main.voice_next()
+            play.assert_awaited_once_with(ids[0], requested_by="auto")
+            with self.sessions() as session:
+                self.assertIsNotNone(session.get(models.QueueItem, ids[-1]))
+            await self.start_current(ids[-1])
+            await main.voice_skip()
+        with self.sessions() as session:
+            self.assertIsNone(session.get(models.QueueItem, ids[-1]))
+
+    async def test_playback_modes_are_exclusive_and_invalid_request_is_rejected(self):
+        from fastapi import HTTPException
+        for mode, repeat, shuffled in (("shuffle", "none", True), ("repeat_one", "one", False), ("repeat_all", "all", False), ("order", "none", False)):
+            result = await main.external_set_playback_mode(main.PlaybackModeRequest(mode=mode))
+            self.assertEqual(result, {"ok": True, "playback_mode": mode})
+            self.assertEqual((main._repeat_mode, main._shuffle_enabled), (repeat, shuffled))
+        with self.assertRaises(HTTPException) as caught:
+            await main.external_set_playback_mode(main.PlaybackModeRequest(mode="invalid"))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(main._selected_playback_mode(), "order")
+
     async def test_failed_transaction_preserves_state_and_does_not_stop_voice(self):
         item_id = self.seed(1)[0]
         await self.start_current(item_id)

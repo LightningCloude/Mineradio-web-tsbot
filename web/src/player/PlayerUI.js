@@ -3,6 +3,7 @@ import { eventBus } from '../shared/EventBus.js';
 import { resolveCoverUrl } from '../shared/CoverUrl.js';
 import { api } from '../core/ApiClient.js';
 import { QueueClearDialog } from './QueueClearDialog.js';
+import { PlaybackModeControl, orderModeIcon } from './PlaybackModeControl.js';
 
 const VOLUME_SLIDER_MAX = 100;
 const VOLUME_OUTPUT_MAX = 25;
@@ -25,6 +26,7 @@ export class PlayerUI {
   constructor(container) {
     this.container = container;
     this._buildDOM();
+    new PlaybackModeControl(this.container.querySelector('[data-action="playback-mode"]'));
     eventBus.on('playback:changed', (pb) => this._onPlaybackChanged(pb));
     eventBus.on('volume:changed', (volume) => this._setVolumeDisplay(volume));
   }
@@ -59,6 +61,7 @@ export class PlayerUI {
           <span class="player-time total">00:00</span>
         </div>
         <div class="right-tools">
+          <button type="button" class="ctrl-btn" data-action="playback-mode" aria-label="播放模式：顺序播放" aria-haspopup="dialog" aria-controls="playback-mode-dialog" aria-expanded="false">${orderModeIcon}</button>
           <button class="ctrl-btn" data-action="search"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></button>
           <button class="ctrl-btn" data-action="queue"><svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor" opacity="0.8"><rect x="3" y="4" width="18" height="2" rx="1"/><rect x="3" y="11" width="18" height="2" rx="1"/><rect x="3" y="18" width="18" height="2" rx="1"/></svg></button>
           <button class="ctrl-btn" data-action="cookie" data-icon="credentials" title="QQ 音乐登录凭据" aria-label="QQ 音乐登录凭据"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="3.5"/><path d="m10 13 8-8 2 2-2 2 1.5 1.5-2 2L16 10l-4 4"/></svg></button>
@@ -80,8 +83,8 @@ export class PlayerUI {
       if (!btn) return;
       const action = btn.dataset.action;
       if (action === 'play') this._togglePlay();
-      if (action === 'skip') api.skip().catch(() => {});
-      if (action === 'prev') { /* not implemented */ }
+      if (action === 'skip') api.playerAction('next').catch(() => {});
+      if (action === 'prev') api.playerAction('previous').catch(() => {});
       if (action === 'search') state.toggleUI('searchOpen');
       if (action === 'queue') state.toggleUI('queueOpen');
       if (action === 'cookie') state.toggleUI('cookieOpen');
